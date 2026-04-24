@@ -19,6 +19,11 @@ class TestResult:
     output_tail: str = ""
 
 
+# Tell pytest this dataclass isn't a test class (otherwise its name triggers
+# "Test*" discovery and produces a collection warning).
+TestResult.__test__ = False
+
+
 _FAIL_FILE_MARKERS = ("failing_tests",)
 
 

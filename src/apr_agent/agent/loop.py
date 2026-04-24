@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 
 from apr_agent.llm.client import LLMClient
+from apr_agent.llm.qwen import mask_sensitive_request
 from apr_agent.schema import BugSample, ToolCall, Turn
 from apr_agent.tools.registry import ToolRegistry
 
@@ -92,7 +93,7 @@ class AgentLoop:
             turn = Turn(
                 turn_idx=turn_idx,
                 started_at=started, ended_at=ended,
-                request=request_body,
+                request=mask_sensitive_request(request_body),
                 response={
                     "parsed": {
                         "content": resp.content,
