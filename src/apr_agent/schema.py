@@ -76,3 +76,19 @@ class Event(_SchemaBase):
     at: float
     kind: EventKind
     payload: dict
+
+
+TrajectoryStatus = Literal["running", "fixed", "failed", "aborted", "timeout", "error"]
+
+
+class Trajectory(_SchemaBase):
+    exp_id: str
+    bug_id: str
+    status: TrajectoryStatus
+    bug_sample: BugSample
+    turns: list[Turn]
+    events: list[Event]
+    final_patch: str
+    verify: VerifyResult | None
+    tool_registry: list[dict]
+    meta: dict

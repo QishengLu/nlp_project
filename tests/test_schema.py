@@ -97,3 +97,42 @@ def test_event_invalid_kind_rejected():
 
     with pytest.raises(ValidationError):
         Event(event_id=0, turn_idx=0, at=0.0, kind="bogus", payload={})
+
+
+from apr_agent.schema import Trajectory
+
+
+def _sample_bug():
+    return BugSample(
+        bug_id="Math-12", project="Math", bug_number=12,
+        buggy_checkout_dir="/tmp/x", trigger_tests=[], currently_failing=[],
+        trigger_test_output="", defects4j_version="2.0.1",
+    )
+
+
+def test_trajectory_minimal():
+    t = Trajectory(
+        exp_id="exp1",
+        bug_id="Math-12",
+        status="running",
+        bug_sample=_sample_bug(),
+        turns=[],
+        events=[],
+        final_patch="",
+        verify=None,
+        tool_registry=[],
+        meta={},
+    )
+    assert t.status == "running"
+    assert Trajectory.model_validate(t.model_dump()) == t
+
+
+def test_trajectory_status_invalid():
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Trajectory(
+            exp_id="e", bug_id="b", status="bogus",
+            bug_sample=_sample_bug(), turns=[], events=[],
+            final_patch="", verify=None, tool_registry=[], meta={},
+        )
