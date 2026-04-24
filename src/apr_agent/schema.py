@@ -1,6 +1,8 @@
 """Data contract. DO NOT BREAK BACKWARDS COMPATIBILITY without bumping version."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -30,3 +32,47 @@ class VerifyResult(_SchemaBase):
     test_exit_code: int
     runtime_s: float
     raw_output: str
+
+
+class ToolCall(_SchemaBase):
+    call_id: str
+    tool_name: str
+    tool_input: dict
+    tool_output: str
+    tool_meta: dict
+    started_at: float
+    ended_at: float
+    is_error: bool
+
+
+class Turn(_SchemaBase):
+    turn_idx: int
+    started_at: float
+    ended_at: float
+    request: dict                      # full body sent to LLM (sanitize secrets before dumping)
+    response: dict                     # {"parsed": {...}, "raw": ...} — parsed is stable contract
+    thinking: str | None = None
+    usage: dict                        # MUST contain prompt_tokens + completion_tokens (0 if unknown)
+    tool_calls: list[ToolCall]
+
+
+EventKind = Literal[
+    "turn_start",
+    "llm_response",
+    "thinking",
+    "text_block",
+    "tool_call_start",
+    "tool_call_end",
+    "error",
+    "turn_end",
+    "verify_start",
+    "verify_end",
+]
+
+
+class Event(_SchemaBase):
+    event_id: int
+    turn_idx: int
+    at: float
+    kind: EventKind
+    payload: dict

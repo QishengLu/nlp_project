@@ -46,3 +46,54 @@ def test_schema_ignores_extra_fields():
     }
     parsed = BugSample.model_validate(raw)
     assert parsed.bug_id == "Math-1"
+
+
+from apr_agent.schema import Event, ToolCall, Turn
+
+
+def test_tool_call_roundtrip():
+    tc = ToolCall(
+        call_id="c1",
+        tool_name="read_file",
+        tool_input={"path": "a.java", "start_line": 1, "end_line": 10},
+        tool_output="... file contents ...",
+        tool_meta={"exit_code": 0},
+        started_at=1000.0,
+        ended_at=1000.5,
+        is_error=False,
+    )
+    assert ToolCall.model_validate(tc.model_dump()) == tc
+
+
+def test_turn_has_tool_calls():
+    t = Turn(
+        turn_idx=0,
+        started_at=1000.0,
+        ended_at=1002.0,
+        request={"messages": []},
+        response={"content": "ok"},
+        thinking=None,
+        usage={"prompt_tokens": 10, "completion_tokens": 5},
+        tool_calls=[],
+    )
+    assert t.turn_idx == 0
+    assert t.tool_calls == []
+
+
+def test_event_kind_validation():
+    e = Event(
+        event_id=0,
+        turn_idx=0,
+        at=1000.0,
+        kind="turn_start",
+        payload={},
+    )
+    assert e.kind == "turn_start"
+
+
+def test_event_invalid_kind_rejected():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Event(event_id=0, turn_idx=0, at=0.0, kind="bogus", payload={})
