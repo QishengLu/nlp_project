@@ -1,0 +1,38 @@
+# Default configuration for `apr-agent run-batch`. See docs/plans/2026-04-24-apr-agent-design.md §8.2.
+
+model:
+  name: qwen3-coder-30b-a3b-instruct
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  max_tokens: 4096
+  temperature: 0.2
+  # enable_thinking flows into DashScope extra_body. Validate with
+  # `python scripts/qwen_smoke.py --enable-thinking` on your endpoint first —
+  # the -Instruct variant may ignore or reject this.
+  enable_thinking: true
+
+agent:
+  max_turns: 30
+  overall_timeout_s: 1800
+  tool_timeouts:
+    run_tests: 300
+    replace_block: 10
+  system_prompt: |
+    You are an Automated Program Repair agent. You have access to a bug's
+    source tree via tools. Your job is to locate and fix the bug so the
+    trigger tests pass, without editing any test files. Read code before
+    editing. Call `finish` with a short rationale when you believe the fix
+    is complete.
+  user_prompt_template: |
+    Fix bug {bug_id}. Trigger tests: {trigger_tests}
+    Trigger test output:
+    {trigger_test_output}
+
+dataset:
+  defects4j_version: "2.0.1"      # semver; main branch shifts — prefer commit_sha
+  defects4j_commit_sha: null      # fill once you've cloned a specific commit
+  d4j_subset: "2.0"               # "1.2" = 395-bug classic APR baseline; "2.0" = 835-bug modern
+
+bugs:
+  - Math-2
+  - Math-12
+  - Lang-1
