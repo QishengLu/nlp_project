@@ -31,7 +31,7 @@ class TrajectoryRecorder:
         bug_sample: BugSample,
         tool_registry: list[dict],
         meta_extras: dict,
-    ) -> "TrajectoryRecorder":
+    ) -> TrajectoryRecorder:
         bug_dir = init_bug_dir(
             data_root=data_root,
             exp_id=exp_id,
@@ -63,8 +63,8 @@ class TrajectoryRecorder:
         append_turn(self.bug_dir, turn)
         stop_reason = None
         if isinstance(turn.response, dict):
-            parsed = turn.response.get("parsed")
-            stop_reason = (parsed or {}).get("stop_reason") if parsed else turn.response.get("stop_reason")
+            parsed = turn.response.get("parsed") or {}
+            stop_reason = parsed.get("stop_reason", turn.response.get("stop_reason"))
         self.emit("llm_response", turn_idx=turn.turn_idx,
                   payload={"stop_reason": stop_reason})
         for tc in turn.tool_calls:

@@ -1,10 +1,19 @@
 from pathlib import Path
 
-from apr_agent.api import load_trajectory
+from apr_agent.api import (
+    iter_trajectories,
+    list_bugs,
+    list_experiments,
+    load_trajectory,
+)
 from apr_agent.schema import BugSample, Event, Turn, VerifyResult
 from apr_agent.trajectory.writer_jsonl import (
-    append_event, append_turn, finalize_meta,
-    init_bug_dir, write_final_patch, write_verify_result,
+    append_event,
+    append_turn,
+    finalize_meta,
+    init_bug_dir,
+    write_final_patch,
+    write_verify_result,
 )
 
 
@@ -69,9 +78,6 @@ def test_package_root_exports():
     import apr_agent
     assert hasattr(apr_agent, "load_trajectory")
     assert hasattr(apr_agent, "Trajectory")
-
-
-from apr_agent.api import iter_trajectories, list_bugs, list_experiments
 
 
 def _seed_two_bugs(tmp_path: Path, exp_id="exp1"):

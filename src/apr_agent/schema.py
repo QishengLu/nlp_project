@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class _SchemaBase(BaseModel):
-    """All schema models ignore unknown fields so downstream readers don't crash on newer trajectories."""
+    """Schema base — `extra="ignore"` lets old readers accept newer trajectories."""
     model_config = ConfigDict(extra="ignore")
 
 
@@ -50,9 +50,9 @@ class Turn(_SchemaBase):
     started_at: float
     ended_at: float
     request: dict                      # full body sent to LLM (sanitize secrets before dumping)
-    response: dict                     # {"parsed": {...}, "raw": ...} — parsed is stable contract
+    response: dict                     # {"parsed": {...}, "raw": ...}; parsed is stable
     thinking: str | None = None
-    usage: dict                        # MUST contain prompt_tokens + completion_tokens (0 if unknown)
+    usage: dict                        # MUST have prompt_tokens+completion_tokens (0 ok)
     tool_calls: list[ToolCall]
 
 

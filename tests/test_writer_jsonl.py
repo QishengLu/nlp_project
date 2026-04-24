@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
 
-from apr_agent.schema import BugSample, VerifyResult
+from apr_agent.schema import BugSample, Event, Turn, VerifyResult
 from apr_agent.trajectory.writer_jsonl import (
+    append_event,
+    append_turn,
     bug_dir_for,
     finalize_meta,
     init_bug_dir,
@@ -76,10 +78,6 @@ def test_finalize_meta_atomic(tmp_path: Path):
     meta = json.loads((bug_dir / "meta.json").read_text())
     assert meta["status"] == "fixed"
     assert meta["duration_s"] == 42.0
-
-
-from apr_agent.schema import Event, Turn
-from apr_agent.trajectory.writer_jsonl import append_event, append_turn
 
 
 def test_append_turn_and_event(tmp_path: Path):

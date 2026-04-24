@@ -21,7 +21,7 @@ __all__ = [
 
 
 class SchemaVersionError(RuntimeError):
-    """Raised when an on-disk trajectory's schema_version has a different major than this library."""
+    """Raised when on-disk schema_version has a different major than this library."""
 
 
 def _check_schema_version(meta: dict, *, path: Path) -> None:

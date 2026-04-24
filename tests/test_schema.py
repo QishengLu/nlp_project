@@ -1,4 +1,4 @@
-from apr_agent.schema import BugSample, VerifyResult
+from apr_agent.schema import BugSample, Event, ToolCall, Trajectory, Turn, VerifyResult
 
 
 def test_bug_sample_roundtrip():
@@ -48,9 +48,6 @@ def test_schema_ignores_extra_fields():
     assert parsed.bug_id == "Math-1"
 
 
-from apr_agent.schema import Event, ToolCall, Turn
-
-
 def test_tool_call_roundtrip():
     tc = ToolCall(
         call_id="c1",
@@ -97,9 +94,6 @@ def test_event_invalid_kind_rejected():
 
     with pytest.raises(ValidationError):
         Event(event_id=0, turn_idx=0, at=0.0, kind="bogus", payload={})
-
-
-from apr_agent.schema import Trajectory
 
 
 def _sample_bug():
