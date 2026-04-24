@@ -76,3 +76,33 @@ def test_finalize_meta_atomic(tmp_path: Path):
     meta = json.loads((bug_dir / "meta.json").read_text())
     assert meta["status"] == "fixed"
     assert meta["duration_s"] == 42.0
+
+
+from apr_agent.schema import Event, Turn
+from apr_agent.trajectory.writer_jsonl import append_event, append_turn
+
+
+def test_append_turn_and_event(tmp_path: Path):
+    data_root = tmp_path / "data"
+    bug_dir = init_bug_dir(data_root=data_root, exp_id="exp1", bug_sample=_bug(),
+                           tool_registry=[], meta_extras={})
+
+    t0 = Turn(turn_idx=0, started_at=0, ended_at=1, request={}, response={},
+              thinking=None, usage={}, tool_calls=[])
+    t1 = Turn(turn_idx=1, started_at=1, ended_at=2, request={}, response={},
+              thinking=None, usage={}, tool_calls=[])
+    append_turn(bug_dir, t0)
+    append_turn(bug_dir, t1)
+
+    e0 = Event(event_id=0, turn_idx=0, at=0.0, kind="turn_start", payload={})
+    e1 = Event(event_id=1, turn_idx=0, at=0.1, kind="llm_response", payload={})
+    append_event(bug_dir, e0)
+    append_event(bug_dir, e1)
+
+    lines = (bug_dir / "turns.jsonl").read_text().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["turn_idx"] == 0
+
+    elines = (bug_dir / "events.jsonl").read_text().splitlines()
+    assert len(elines) == 2
+    assert json.loads(elines[1])["event_id"] == 1
