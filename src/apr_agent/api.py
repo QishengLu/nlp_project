@@ -15,6 +15,7 @@ from apr_agent.trajectory.writer_jsonl import SCHEMA_VERSION, bug_dir_for
 __all__ = [
     "Trajectory", "Turn", "Event", "VerifyResult", "BugSample",
     "load_trajectory", "iter_trajectories", "list_bugs", "list_experiments",
+    "get_turns_as_messages",
     "SchemaVersionError",
 ]
 
@@ -136,3 +137,61 @@ def iter_trajectories(
         status_in = {"fixed"}
     for bug_id in list_bugs(data_root, exp_id, status_filter=status_in):
         yield load_trajectory(data_root, exp_id, bug_id)
+
+
+def get_turns_as_messages(
+    trajectory: Trajectory,
+    *,
+    include_thinking: bool = False,
+    include_system: bool = True,
+) -> list[dict]:
+    """Convert a Trajectory into OpenAI chat-template messages for SFT.
+
+    Structure:
+      - system (from turn 0's request, if any)
+      - user (from turn 0's request)
+      - per-turn assistant message (+ optional tool_calls)
+      - per-tool_call tool message
+    """
+    messages: list[dict] = []
+
+    if trajectory.turns:
+        seed_request_messages = trajectory.turns[0].request.get("messages", [])
+        for m in seed_request_messages:
+            if m.get("role") == "system" and not include_system:
+                continue
+            messages.append(m)
+
+    for turn in trajectory.turns:
+        # turn.response shape from AgentLoop is {"parsed": {"content": ..., ...},
+        # "raw": ...}. Older hand-built trajectories may still have flat
+        # {"content": ...}; prefer parsed but fall back.
+        parsed = turn.response.get("parsed", {}) if isinstance(turn.response, dict) else {}
+        content = parsed.get("content") if "content" in parsed else turn.response.get("content", "")
+        content = content or ""
+        if include_thinking and turn.thinking:
+            content = f"<think>{turn.thinking}</think>\n{content}"
+
+        assistant_msg: dict = {"role": "assistant", "content": content}
+        if turn.tool_calls:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.tool_name,
+                        "arguments": json.dumps(tc.tool_input, ensure_ascii=False),
+                    },
+                }
+                for tc in turn.tool_calls
+            ]
+        messages.append(assistant_msg)
+
+        for tc in turn.tool_calls:
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.call_id,
+                "content": tc.tool_output,
+            })
+
+    return messages
