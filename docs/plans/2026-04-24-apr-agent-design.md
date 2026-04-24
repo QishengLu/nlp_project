@@ -165,8 +165,11 @@ class BugSample(BaseModel):
     project: str                    # "Math"
     bug_number: int
     buggy_checkout_dir: str
-    failing_tests: list[str]
+    trigger_tests: list[str]        # defects4j export -p tests.trigger (authoritative)
+    currently_failing: list[str]    # observed after checkout (may be superset of trigger_tests)
     trigger_test_output: str
+    defects4j_version: str          # e.g. "2.0.1"
+    d4j_subset: str | None = None   # e.g. "1.2" / "2.0" — which academic slice this bug belongs to
     loc_hints: dict | None = None
 
 class ToolCall(BaseModel):
@@ -183,10 +186,13 @@ class Turn(BaseModel):
     turn_idx: int
     started_at: float
     ended_at: float
-    request: dict                   # 发给 LLM 的完整 body
-    response: dict                  # LLM 原始响应
-    thinking: str | None = None     # 解析 <think>...</think> 抽出
-    usage: dict
+    request: dict                   # 发给 LLM 的完整 body（API key 等敏感字段 M3 里 mask 掉）
+    response: dict                  # {"parsed": {"content", "stop_reason", "tool_calls"},
+                                    #  "raw": <provider-native dump>}
+                                    # parsed 是稳定契约，raw 不保证 shape
+    thinking: str | None = None     # 解析 <think>...</think> 抽出（M3 待验证载体形式）
+    usage: dict                     # MUST contain {"prompt_tokens", "completion_tokens"}
+                                    # 缺项填 0，不得省略——per-turn cost 归因必需
     tool_calls: list[ToolCall]
 
 class Event(BaseModel):
@@ -226,6 +232,8 @@ class Trajectory(BaseModel):
 
 `model_config = ConfigDict(extra="ignore")` 让下游读老数据不炸。
 
+**Schema 版本**：`meta.json` 里写 `"schema_version": "1.0"`。`load_trajectory` 遇到不认识的 major 号直接 raise。`extra="ignore"` 只扛加字段，扛不住 rename/删字段/语义变化，必须靠显式版本号。
+
 ### 5.2 On-disk layout (per bug)
 
 ```
@@ -245,11 +253,14 @@ data/trajectories/<exp_id>/<bug_id>/
 
 ### 5.3 写入顺序（崩溃恢复）
 
-1. 启动：写 `bug_sample.json` + `tool_registry.json` + `meta.json (status="running")`
-2. 事件发生：立刻 append `events.jsonl`
-3. Turn 完成：append `turns.jsonl`
-4. Verify 完成：写 `final_patch.diff` + `verify_result.json`
-5. 原子 rename 覆盖 `meta.json`（`status="fixed"/"failed"/...`）
+**粒度：turn 级持久化。** 单个 turn 内的事件（`llm_response` / `tool_call_*` / `turn_end`）在 turn 结束时批量 append。原因是 M1 的 loop 不直接持有 recorder，事件由 `record_turn` 统一派生。代价是：如果 worker 在 tool 调用中途被 kill（例如 `run_tests` 超时、JVM OOM），当前 turn 的事件完全丢失。
+
+**后续**（M3 接真 tool 时）：若该代价不能接受，把 recorder 注入 AgentLoop，`tool_call_start/end` 在 invoke 前后实时 emit。M1 先冻 schema，loop 内部结构可以后改，schema 不变。
+
+1. 启动：写 `bug_sample.json` + `tool_registry.json` + `meta.json (status="running", schema_version="1.0")`
+2. Turn 完成：先 append `turns.jsonl`，再 append 本 turn 的派生事件到 `events.jsonl`（顺序很重要——崩在中间时要么两边都有，要么只剩 turn 记录，没有「有事件无 turn」的脏状态）
+3. Verify 完成：写 `final_patch.diff` + `verify_result.json`
+4. 原子 rename 覆盖 `meta.json`（`status="fixed"/"failed"/...`）
 
 → `status="running"` 的目录下次 run-batch 自动识别并重跑（先 `mv <bug>/ <bug>.trash-<ts>/`）。
 
@@ -264,7 +275,13 @@ get_turns_as_messages(
 ) -> list[dict]
 ```
 
-OpenAI chat-template 兼容（role: system/user/assistant/tool，`tool_calls`/`tool_call_id`），直接能拼 SFT dataset。Qwen 的 thinking 是 inline `<think>` 标签，无需 block 转换。
+OpenAI chat-template 兼容（role: system/user/assistant/tool，`tool_calls`/`tool_call_id`），直接能拼 SFT dataset。
+
+**TODO (M3 待验证)**：Qwen thinking 的载体形式依赖具体端点和模型变体：
+- 自部署 Qwen3-Thinking：inline `<think>...</think>`
+- DashScope OpenAI-compatible 端点（`reasoning_content` 单独字段）对 `qwen3-coder-30b-a3b-instruct` 这个 `-Instruct` 变体到底支持不支持、`enable_thinking: true` 是被接受还是被忽略/报错，**未验证**
+
+M3 第一步先跑 `scripts/qwen_smoke.py`：单轮 chat，完整打印 response JSON 原样，确认字段形状再写 parser。别预先押注。
 
 ## 6. Tools (7 个)
 
@@ -278,7 +295,9 @@ OpenAI chat-template 兼容（role: system/user/assistant/tool，`tool_calls`/`t
 | `get_failing_tests` | `() -> list[str]` | |
 | `finish` | `(rationale: str) -> None` | 宣告完成 |
 
-**排除**：通用 shell、git 操作、任意写路径；`replace_block` 硬拒 `*Test*.java` 和 trigger tests。
+**排除**：通用 shell、git 操作、任意写路径。
+
+**`replace_block` 防作弊 deny-list**（M2 实现）：用 `defects4j export -p tests.trigger` 拿到权威 trigger test 路径做硬名单，**不要用 `*Test*.java` 正则**——会漏 `*IT.java`/`*Spec.java`，会误伤 `TestUtils.java` 这类工具类。`BugSample.trigger_tests` 已经把路径带过来了，直接用。
 
 ## 7. Defects4J integration
 
@@ -323,7 +342,7 @@ model:
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   max_tokens: 4096
   temperature: 0.2
-  enable_thinking: true
+  enable_thinking: true         # M3 待验证实际是否被 DashScope 接受，见 §5.4 TODO
 
 agent:
   max_turns: 30
@@ -332,7 +351,15 @@ agent:
     run_tests: 300
     replace_block: 10
 
+dataset:
+  defects4j_version: "2.0.1"    # semver；main 分支在动，务必锁
+  defects4j_commit_sha: null    # 可选；填了以它为准
+  d4j_subset: "2.0"             # "1.2" = 经典 APR baseline (395 bugs, 6 projects)
+                                # "2.0" = 现代切片 (835 bugs, 17 projects)
+
 bugs:
+  # 显式 bug id；`apr-agent` 启动时会和 `defects4j bids -p <project>` 拿到的
+  # active list 做交叉校验，命中 deprecated 的直接 warn + skip
   - Math-12
   - Lang-1
 ```
@@ -403,13 +430,20 @@ def read_decomposed_steps(data_root, exp_id, bug_id) -> list[Step] | None
 {
   "git_sha": "...",
   "defects4j_version": "2.0.1",
+  "defects4j_commit_sha": "...",
+  "d4j_subset": "2.0",
   "java_version": "1.8.0_392",
+  "tz": "America/Los_Angeles",
   "python_version": "3.11.9",
   "apr_agent_version": "0.1.0",
   "model_id": "qwen3-coder-30b-a3b-instruct",
   "host": "..."
 }
 ```
+
+**时区强制**：Defects4J 在 `America/Los_Angeles` 时区生成/执行测试，部分 bug 的 trigger test 对时区敏感。worker subprocess 启动前必须 `export TZ=America/Los_Angeles`（在 M3 的 `agent/worker.py` 里做），不然会诡异失败。fingerprint 里记下来是为了防止谁漏 export 后事后甩锅找不到原因。
+
+**版本锁**：`defects4j_version` 是 semver（如 `2.0.1`），`defects4j_commit_sha` 是具体 commit。主分支 active-bugs 数量一直在动（当前 main 已到 854），**必须锁 commit**，版本号只是辅助可读性。
 
 ## 13. External dependencies
 
@@ -426,7 +460,13 @@ sudo apt install openjdk-8-jdk
 uv sync
 ```
 
-## 14. Open questions / deferred
+## 14. Evaluation protocol notes
+
+**Oracle-access 设定**：agent 在 run 中可以调 `run_tests` 拿到实时 pass/fail 反馈，属于 **oracle-access** 设定。下游小模型同学训练完做 eval 也**必须**在 oracle-access 下评测（同样暴露 `run_tests`），否则训练/评测分布错配，结论不成立。
+
+**不作弊约束**：即便是 oracle-access，agent 也不允许改测试文件（`replace_block` 通过 `trigger_tests` 路径做硬 deny-list）、不允许用 reflection 绕 assertion（v2 防作弊，短期不做）。
+
+## 15. Open questions / deferred
 
 - **DB 迁移触发条件**：bug 数 > 500 或下游同学有 SQL 查询需求时再做。schema 已预留。
 - **HTTP API**：跨机协作出现时再做，接口和 Python lib 一一对应。

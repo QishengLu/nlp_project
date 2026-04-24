@@ -53,6 +53,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
     "ruff>=0.3",
     "mypy>=1.8",
 ]
@@ -100,7 +101,7 @@ __pycache__/
 
 # Data
 data/
-/tmp/
+scratch/
 *.log
 
 # Env
@@ -173,13 +174,16 @@ def test_bug_sample_roundtrip():
         project="Math",
         bug_number=12,
         buggy_checkout_dir="/tmp/scratch/Math-12",
-        failing_tests=["org.apache.commons.math.TestFoo::bar"],
+        trigger_tests=["org.apache.commons.math.TestFoo::bar"],
+        currently_failing=["org.apache.commons.math.TestFoo::bar"],
         trigger_test_output="AssertionError: expected 1, got 2",
+        defects4j_version="2.0.1",
     )
     dumped = s.model_dump()
     restored = BugSample.model_validate(dumped)
     assert restored == s
     assert restored.loc_hints is None
+    assert restored.d4j_subset is None   # optional
 
 
 def test_verify_result_defaults():
@@ -201,8 +205,10 @@ def test_schema_ignores_extra_fields():
         "project": "Math",
         "bug_number": 1,
         "buggy_checkout_dir": "/tmp/x",
-        "failing_tests": [],
+        "trigger_tests": [],
+        "currently_failing": [],
         "trigger_test_output": "",
+        "defects4j_version": "2.0.1",
         "future_field_added_later": "ok",
     }
     parsed = BugSample.model_validate(raw)
@@ -233,8 +239,11 @@ class BugSample(_SchemaBase):
     project: str                       # e.g. "Math"
     bug_number: int
     buggy_checkout_dir: str
-    failing_tests: list[str]
+    trigger_tests: list[str]           # authoritative: `defects4j export -p tests.trigger`
+    currently_failing: list[str]       # observed after checkout; may be superset of trigger_tests
     trigger_test_output: str
+    defects4j_version: str             # e.g. "2.0.1" — frozen per bug for reproducibility
+    d4j_subset: str | None = None      # e.g. "1.2" / "2.0" — academic slice label
     loc_hints: dict | None = None
 
 
@@ -412,7 +421,8 @@ from apr_agent.schema import Trajectory
 def _sample_bug():
     return BugSample(
         bug_id="Math-12", project="Math", bug_number=12,
-        buggy_checkout_dir="/tmp/x", failing_tests=[], trigger_test_output="",
+        buggy_checkout_dir="/tmp/x", trigger_tests=[], currently_failing=[],
+        trigger_test_output="", defects4j_version="2.0.1",
     )
 
 
@@ -512,7 +522,8 @@ from apr_agent.trajectory.writer_jsonl import (
 def _bug():
     return BugSample(
         bug_id="Math-12", project="Math", bug_number=12,
-        buggy_checkout_dir="/tmp/x", failing_tests=["t1"], trigger_test_output="out",
+        buggy_checkout_dir="/tmp/x", trigger_tests=["t1"], currently_failing=["t1"],
+        trigger_test_output="out", defects4j_version="2.0.1",
     )
 
 
@@ -533,6 +544,7 @@ def test_init_bug_dir_creates_files(tmp_path: Path):
     assert meta["status"] == "running"
     assert meta["bug_id"] == "Math-12"
     assert meta["model_name"] == "qwen"
+    assert meta["schema_version"] == "1.0"    # frozen contract version
     assert (bug_dir / "turns.jsonl").exists()
     assert (bug_dir / "events.jsonl").exists()
 
@@ -599,6 +611,11 @@ from pathlib import Path
 
 from apr_agent.schema import BugSample, VerifyResult
 
+# Frozen contract version. Bump MAJOR on any rename/removal/semantic change;
+# bump MINOR for additive changes. `extra="ignore"` does not protect against
+# removed/renamed fields — the version is the authoritative guard.
+SCHEMA_VERSION = "1.0"
+
 
 def bug_dir_for(data_root: Path | str, exp_id: str, bug_id: str) -> Path:
     return Path(data_root) / "trajectories" / exp_id / bug_id
@@ -634,6 +651,7 @@ def init_bug_dir(
     )
 
     meta = {
+        "schema_version": SCHEMA_VERSION,    # bump major when breaking downstream
         "exp_id": exp_id,
         "bug_id": bug_sample.bug_id,
         "status": "running",
@@ -795,8 +813,9 @@ from apr_agent.trajectory.writer_jsonl import (
 def _seed_bug(tmp_path: Path, exp_id="exp1", bug_id="Math-12"):
     data_root = tmp_path / "data"
     bug = BugSample(bug_id=bug_id, project="Math", bug_number=12,
-                    buggy_checkout_dir="/tmp/x", failing_tests=["t1"],
-                    trigger_test_output="")
+                    buggy_checkout_dir="/tmp/x", trigger_tests=["t1"],
+                    currently_failing=["t1"], trigger_test_output="",
+                    defects4j_version="2.0.1")
     bd = init_bug_dir(data_root=data_root, exp_id=exp_id, bug_sample=bug,
                       tool_registry=[{"name": "finish"}],
                       meta_extras={"model_name": "fake"})
@@ -828,6 +847,24 @@ def test_load_trajectory_roundtrip(tmp_path: Path):
     assert tr.tool_registry == [{"name": "finish"}]
     assert tr.meta["model_name"] == "fake"
     assert tr.meta["duration_s"] == 1.0
+    assert tr.meta["schema_version"] == "1.0"
+
+
+def test_load_trajectory_rejects_incompatible_schema_version(tmp_path: Path):
+    import json as _json
+
+    import pytest
+
+    from apr_agent.api import SchemaVersionError
+
+    data_root = _seed_bug(tmp_path)
+    meta_path = data_root / "trajectories" / "exp1" / "Math-12" / "meta.json"
+    meta = _json.loads(meta_path.read_text())
+    meta["schema_version"] = "2.0"     # future major the library doesn't know
+    meta_path.write_text(_json.dumps(meta))
+
+    with pytest.raises(SchemaVersionError):
+        load_trajectory(data_root, "exp1", "Math-12")
 ```
 
 **Step 2: Run, verify fail**
@@ -850,12 +887,34 @@ import json
 from pathlib import Path
 
 from apr_agent.schema import BugSample, Event, Trajectory, Turn, VerifyResult
-from apr_agent.trajectory.writer_jsonl import bug_dir_for
+from apr_agent.trajectory.writer_jsonl import SCHEMA_VERSION, bug_dir_for
 
 __all__ = [
     "Trajectory", "Turn", "Event", "VerifyResult", "BugSample",
     "load_trajectory",
 ]
+
+
+class SchemaVersionError(RuntimeError):
+    """Raised when an on-disk trajectory's schema_version has a different major than this library."""
+
+
+def _check_schema_version(meta: dict, *, path: Path) -> None:
+    got = meta.get("schema_version")
+    if got is None:
+        # Pre-1.0 trajectories (shouldn't exist post-M1). Be strict — force user to migrate.
+        raise SchemaVersionError(
+            f"{path}: meta.json missing schema_version. "
+            f"This library expects schema_version={SCHEMA_VERSION}."
+        )
+    want_major = SCHEMA_VERSION.split(".")[0]
+    got_major = str(got).split(".")[0]
+    if got_major != want_major:
+        raise SchemaVersionError(
+            f"{path}: schema_version={got} (major {got_major}) incompatible with "
+            f"library schema_version={SCHEMA_VERSION} (major {want_major}). "
+            f"Bump the library or migrate the data."
+        )
 
 
 def load_trajectory(
@@ -869,6 +928,7 @@ def load_trajectory(
         raise FileNotFoundError(f"Trajectory not found: {bug_dir}")
 
     meta = json.loads((bug_dir / "meta.json").read_text())
+    _check_schema_version(meta, path=bug_dir / "meta.json")
     bug_sample = BugSample.model_validate_json((bug_dir / "bug_sample.json").read_text())
     tool_registry = json.loads((bug_dir / "tool_registry.json").read_text())
 
@@ -912,7 +972,7 @@ def _read_jsonl_lines(path: Path):
 **Step 4: Run, verify pass**
 
 Run: `uv run pytest tests/test_api_read.py -v`
-Expected: 1 passed.
+Expected: 2 passed (`test_load_trajectory_roundtrip`, `test_load_trajectory_rejects_incompatible_schema_version`).
 
 **Step 5: Export from package root — edit `src/apr_agent/__init__.py`**
 
@@ -935,13 +995,13 @@ def test_package_root_exports():
 ```
 
 Run: `uv run pytest tests/test_api_read.py -v`
-Expected: 2 passed.
+Expected: 3 passed.
 
 **Step 7: Commit**
 
 ```bash
 git add src/apr_agent/api.py src/apr_agent/__init__.py tests/test_api_read.py
-git commit -m "feat: load_trajectory + package-root re-export"
+git commit -m "feat: load_trajectory + schema_version guard + package-root re-export"
 ```
 
 ---
@@ -1085,7 +1145,8 @@ from apr_agent.trajectory.writer_jsonl import append_turn, finalize_meta, init_b
 def _make_traj(tmp_path: Path, thinking: str | None = None):
     data_root = tmp_path / "data"
     bug = BugSample(bug_id="Math-1", project="Math", bug_number=1,
-                    buggy_checkout_dir="/x", failing_tests=[], trigger_test_output="")
+                    buggy_checkout_dir="/x", trigger_tests=[], currently_failing=[],
+                    trigger_test_output="", defects4j_version="2.0.1")
     bd = init_bug_dir(data_root=data_root, exp_id="e", bug_sample=bug,
                       tool_registry=[], meta_extras={})
     t0 = Turn(
@@ -1184,7 +1245,12 @@ def get_turns_as_messages(
             messages.append(m)
 
     for turn in trajectory.turns:
-        content = turn.response.get("content", "") or ""
+        # turn.response shape from AgentLoop is {"parsed": {"content": ..., ...},
+        # "raw": ...}. Older hand-built trajectories may still have flat
+        # {"content": ...}; prefer parsed but fall back.
+        parsed = turn.response.get("parsed", {}) if isinstance(turn.response, dict) else {}
+        content = parsed.get("content") if "content" in parsed else turn.response.get("content", "")
+        content = content or ""
         if include_thinking and turn.thinking:
             content = f"<think>{turn.thinking}</think>\n{content}"
 
@@ -1254,7 +1320,8 @@ from apr_agent.trajectory.recorder import TrajectoryRecorder
 
 def _bug():
     return BugSample(bug_id="Math-12", project="Math", bug_number=12,
-                     buggy_checkout_dir="/tmp/x", failing_tests=[], trigger_test_output="")
+                     buggy_checkout_dir="/tmp/x", trigger_tests=[], currently_failing=[],
+                     trigger_test_output="", defects4j_version="2.0.1")
 
 
 def test_recorder_full_flow(tmp_path: Path):
@@ -1372,9 +1439,17 @@ class TrajectoryRecorder:
         return ev
 
     def record_turn(self, turn: Turn) -> None:
-        """Append the turn AND emit derived events for llm_response + tool_calls + turn_end."""
+        """Persist the turn first, then emit derived events.
+
+        Order matters for crash recovery: if the worker dies mid-sequence, we want
+        either (turn + partial events) or (no turn + no events) — never "events
+        referencing a turn that was never written". Hence `append_turn` goes first.
+        """
+        append_turn(self.bug_dir, turn)
         self.emit("llm_response", turn_idx=turn.turn_idx,
-                  payload={"stop_reason": turn.response.get("stop_reason")})
+                  payload={"stop_reason": turn.response.get("parsed", {}).get("stop_reason")
+                                           if "parsed" in turn.response
+                                           else turn.response.get("stop_reason")})
         for tc in turn.tool_calls:
             self.emit("tool_call_start", turn_idx=turn.turn_idx,
                       payload={"call_id": tc.call_id, "tool_name": tc.tool_name,
@@ -1383,7 +1458,6 @@ class TrajectoryRecorder:
                       payload={"call_id": tc.call_id, "is_error": tc.is_error,
                                "tool_meta": tc.tool_meta})
         self.emit("turn_end", turn_idx=turn.turn_idx, payload={})
-        append_turn(self.bug_dir, turn)
 
     def write_patch(self, patch: str) -> None:
         write_final_patch(self.bug_dir, patch)
@@ -1622,6 +1696,17 @@ def test_fake_llm_exhaustion_raises():
     import pytest
     with pytest.raises(RuntimeError):
         client.chat(messages=[], tools=[])
+
+
+def test_fake_llm_usage_has_required_keys():
+    """Contract: every Turn.usage MUST have prompt_tokens and completion_tokens,
+    filled with 0 if unknown. Downstream cost/attribution code can rely on this."""
+    client = FakeLLMClient(script=[ScriptedResponse(content="x")])
+    r = client.chat(messages=[], tools=[])
+    assert "prompt_tokens" in r.usage
+    assert "completion_tokens" in r.usage
+    assert isinstance(r.usage["prompt_tokens"], int)
+    assert isinstance(r.usage["completion_tokens"], int)
 ```
 
 **Step 2: Run, verify fail**
@@ -1726,7 +1811,7 @@ class FakeLLMClient:
 **Step 6: Run, verify pass**
 
 Run: `uv run pytest tests/test_fake_llm.py -v`
-Expected: 2 passed.
+Expected: 3 passed.
 
 **Step 7: Commit**
 
@@ -1759,7 +1844,8 @@ from apr_agent.tools.registry import ToolRegistry
 
 def _bug():
     return BugSample(bug_id="Math-1", project="Math", bug_number=1,
-                     buggy_checkout_dir="/tmp/x", failing_tests=[], trigger_test_output="")
+                     buggy_checkout_dir="/tmp/x", trigger_tests=[], currently_failing=[],
+                     trigger_test_output="", defects4j_version="2.0.1")
 
 
 def test_loop_terminates_on_finish(tmp_path: Path):
@@ -1803,6 +1889,57 @@ def test_loop_respects_max_turns(tmp_path: Path):
     stop_reason, turns = loop.run(_bug())
     assert stop_reason == "max_turns"
     assert len(turns) == 2
+
+
+def test_loop_survives_malformed_tool_arguments(tmp_path: Path):
+    """Small models frequently emit invalid JSON in tool_calls. The loop must
+    record the failure as is_error=True and keep going, so the LLM sees its own
+    mistake in the next turn and can self-correct."""
+    from apr_agent.llm.client import ChatResponse
+
+    class BadJSONClient:
+        def __init__(self):
+            self._calls = 0
+
+        def chat(self, *, messages, tools, temperature=0.2, max_tokens=4096):
+            self._calls += 1
+            if self._calls == 1:
+                # First turn: malformed JSON arguments
+                return ChatResponse(
+                    content="let me fix it",
+                    tool_calls=[{"id": "c1", "type": "function",
+                                 "function": {"name": "finish",
+                                              "arguments": "{not valid json"}}],
+                    stop_reason="tool_calls", thinking=None,
+                    usage={"prompt_tokens": 0, "completion_tokens": 0},
+                    raw={},
+                )
+            # Second turn: valid JSON, terminates
+            return ChatResponse(
+                content="retry", tool_calls=[{"id": "c2", "type": "function",
+                                              "function": {"name": "finish",
+                                                           "arguments": '{"rationale":"ok"}'}}],
+                stop_reason="tool_calls", thinking=None,
+                usage={"prompt_tokens": 0, "completion_tokens": 0},
+                raw={},
+            )
+
+    reg = ToolRegistry()
+    reg.register(FinishTool())
+    loop = AgentLoop(
+        llm=BadJSONClient(), tools=reg,
+        config=AgentConfig(max_turns=5, system_prompt="s", user_prompt_template="f {bug_id}"),
+    )
+    stop_reason, turns = loop.run(_bug())
+    assert stop_reason == "finish"
+    assert len(turns) == 2
+    # First turn: is_error=True, parse_error recorded, loop did not crash
+    bad = turns[0].tool_calls[0]
+    assert bad.is_error is True
+    assert bad.tool_meta["error"] == "malformed_tool_arguments"
+    assert "parse_error" in bad.tool_meta
+    # Second turn: succeeded
+    assert turns[1].tool_calls[0].is_error is False
 ```
 
 **Step 2: Run, verify fail**
@@ -1831,7 +1968,7 @@ from apr_agent.tools.registry import ToolRegistry
 class AgentConfig:
     max_turns: int
     system_prompt: str
-    user_prompt_template: str  # e.g. "Fix bug {bug_id}. Failing tests: {failing_tests}"
+    user_prompt_template: str  # e.g. "Fix bug {bug_id}. Trigger tests: {trigger_tests}"
     temperature: float = 0.2
     max_tokens: int = 4096
 
@@ -1848,7 +1985,7 @@ class AgentLoop:
             {"role": "system", "content": self.config.system_prompt},
             {"role": "user", "content": self.config.user_prompt_template.format(
                 bug_id=bug.bug_id,
-                failing_tests=", ".join(bug.failing_tests),
+                trigger_tests=", ".join(bug.trigger_tests),
                 trigger_test_output=bug.trigger_test_output,
             )},
         ]
@@ -1874,9 +2011,23 @@ class AgentLoop:
             for tc in resp.tool_calls:
                 fn = tc["function"]
                 tool_name = fn["name"]
-                tool_input = _json.loads(fn["arguments"])
                 t_start = time.time()
-                if tool_name in self.tools:
+                # Parse arguments. LLMs (especially small ones) sometimes emit
+                # malformed JSON — we MUST keep the loop alive so it can self-correct.
+                try:
+                    tool_input = _json.loads(fn["arguments"])
+                    parse_error = None
+                except _json.JSONDecodeError as e:
+                    tool_input = {}
+                    parse_error = f"{type(e).__name__}: {e}"
+                if parse_error is not None:
+                    out, meta, is_err = (
+                        "",
+                        {"error": "malformed_tool_arguments", "parse_error": parse_error,
+                         "raw_arguments": fn["arguments"]},
+                        True,
+                    )
+                elif tool_name in self.tools:
                     tool = self.tools.get(tool_name)
                     result = tool.invoke(tool_input)
                     out, meta, is_err = result.output, result.meta, result.is_error
@@ -1892,12 +2043,21 @@ class AgentLoop:
                 ))
 
             ended = time.time()
+            # Keep parsed and raw response cleanly separated. `**resp.raw` used to be
+            # spread after `content`/`tool_calls`/`stop_reason`, silently clobbering the
+            # parsed view with whatever shape the provider happened to return.
             turn = Turn(
                 turn_idx=turn_idx,
                 started_at=started, ended_at=ended,
                 request=request_body,
-                response={"content": resp.content, "stop_reason": resp.stop_reason,
-                          "tool_calls": resp.tool_calls, **resp.raw},
+                response={
+                    "parsed": {
+                        "content": resp.content,
+                        "stop_reason": resp.stop_reason,
+                        "tool_calls": resp.tool_calls,
+                    },
+                    "raw": resp.raw,
+                },
                 thinking=resp.thinking,
                 usage=resp.usage,
                 tool_calls=tool_calls_record,
@@ -1923,13 +2083,13 @@ class AgentLoop:
 **Step 5: Run, verify pass**
 
 Run: `uv run pytest tests/test_agent_loop.py -v`
-Expected: 2 passed.
+Expected: 3 passed.
 
 **Step 6: Commit**
 
 ```bash
 git add src/apr_agent/agent/__init__.py src/apr_agent/agent/loop.py tests/test_agent_loop.py
-git commit -m "feat: AgentLoop tool-use while-loop"
+git commit -m "feat: AgentLoop tool-use while-loop with malformed-JSON recovery"
 ```
 
 ---
@@ -1958,8 +2118,10 @@ def test_fake_e2e_produces_loadable_trajectory(tmp_path: Path):
     bug = BugSample(
         bug_id="Math-12", project="Math", bug_number=12,
         buggy_checkout_dir="/tmp/x",
-        failing_tests=["org.apache.commons.math.TestFoo::bar"],
+        trigger_tests=["org.apache.commons.math.TestFoo::bar"],
+        currently_failing=["org.apache.commons.math.TestFoo::bar"],
         trigger_test_output="AssertionError",
+        defects4j_version="2.0.1",
     )
 
     # 1. Build fake LLM, tools, recorder
@@ -1985,7 +2147,7 @@ def test_fake_e2e_produces_loadable_trajectory(tmp_path: Path):
         llm=fake, tools=reg,
         config=AgentConfig(max_turns=5,
                            system_prompt="You are an APR agent.",
-                           user_prompt_template="Fix {bug_id}. Failing: {failing_tests}"),
+                           user_prompt_template="Fix {bug_id}. Trigger: {trigger_tests}"),
     )
     stop_reason, turns = loop.run(bug)
     for turn in turns:
@@ -2002,7 +2164,7 @@ def test_fake_e2e_produces_loadable_trajectory(tmp_path: Path):
     assert tr.turns[0].tool_calls[0].tool_name == "finish"
     assert tr.turns[0].thinking == "let me think"
     assert tr.meta["model_name"] == "fake-llm"
-    # 5 derived events: llm_response + tool_call_start + tool_call_end + turn_end
+    # 4 derived events: llm_response + tool_call_start + tool_call_end + turn_end
     # (no manual turn_start in this flow)
     assert len(tr.events) == 4
 
@@ -2144,7 +2306,8 @@ def _seed_minimal(tmp_path: Path):
     from apr_agent.trajectory.recorder import TrajectoryRecorder
 
     bug = BugSample(bug_id="B-1", project="B", bug_number=1,
-                    buggy_checkout_dir="/tmp/x", failing_tests=[], trigger_test_output="")
+                    buggy_checkout_dir="/tmp/x", trigger_tests=[], currently_failing=[],
+                    trigger_test_output="", defects4j_version="2.0.1")
     fake = FakeLLMClient(script=[ScriptedResponse(content="done",
         tool_calls=[{"id": "c1", "name": "finish", "arguments": {"rationale": "r"}}])])
     reg = ToolRegistry(); reg.register(FinishTool())
@@ -2227,16 +2390,17 @@ Expected: no errors. Fix any warnings that appear (imports, unused names).
 **Step 2: Run full test suite**
 
 Run: `uv run pytest -v`
-Expected: all tests from Task 2–16 pass. Should be ~30 tests.
+Expected: all tests from Task 2–16 pass. Should be ~33 tests.
 
-**Step 3: Produce a coverage summary** (optional but recommended)
+**Step 3: Produce a coverage summary**
+
+`pytest-cov` was added to `[project.optional-dependencies].dev` in Task 1, so no extra install needed.
 
 Run:
 ```bash
-uv pip install pytest-cov
 uv run pytest --cov=apr_agent --cov-report=term-missing
 ```
-Expected: coverage ≥ 80% on `apr_agent/*` (your global rule). If anything is under 80%, add targeted tests.
+Expected: coverage ≥ 80% on `apr_agent/*` (per global rule). If anything is under 80%, add targeted tests.
 
 **Step 4: Commit any lint fixes**
 
