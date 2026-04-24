@@ -69,3 +69,39 @@ def test_package_root_exports():
     import apr_agent
     assert hasattr(apr_agent, "load_trajectory")
     assert hasattr(apr_agent, "Trajectory")
+
+
+from apr_agent.api import iter_trajectories, list_bugs, list_experiments
+
+
+def _seed_two_bugs(tmp_path: Path, exp_id="exp1"):
+    _seed_bug(tmp_path, exp_id=exp_id, bug_id="Math-12")
+    # Second bug: mark as failed
+    bug = BugSample(bug_id="Lang-1", project="Lang", bug_number=1,
+                    buggy_checkout_dir="/tmp/x", trigger_tests=[],
+                    currently_failing=[], trigger_test_output="",
+                    defects4j_version="2.0.1")
+    bd = init_bug_dir(data_root=tmp_path / "data", exp_id=exp_id, bug_sample=bug,
+                      tool_registry=[], meta_extras={})
+    finalize_meta(bd, status="failed")
+    return tmp_path / "data"
+
+
+def test_list_experiments_and_bugs(tmp_path: Path):
+    data_root = _seed_two_bugs(tmp_path)
+    assert list_experiments(data_root) == ["exp1"]
+    bugs = list_bugs(data_root, "exp1")
+    assert sorted(bugs) == ["Lang-1", "Math-12"]
+
+
+def test_list_bugs_status_filter(tmp_path: Path):
+    data_root = _seed_two_bugs(tmp_path)
+    fixed = list_bugs(data_root, "exp1", status_filter={"fixed"})
+    assert fixed == ["Math-12"]
+
+
+def test_iter_trajectories_only_fixed(tmp_path: Path):
+    data_root = _seed_two_bugs(tmp_path)
+    fixed = list(iter_trajectories(data_root, "exp1", only_fixed=True))
+    assert len(fixed) == 1
+    assert fixed[0].bug_id == "Math-12"

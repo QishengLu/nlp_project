@@ -14,7 +14,7 @@ from apr_agent.trajectory.writer_jsonl import SCHEMA_VERSION, bug_dir_for
 
 __all__ = [
     "Trajectory", "Turn", "Event", "VerifyResult", "BugSample",
-    "load_trajectory",
+    "load_trajectory", "iter_trajectories", "list_bugs", "list_experiments",
     "SchemaVersionError",
 ]
 
@@ -90,3 +90,49 @@ def _read_jsonl_lines(path: Path):
             line = line.strip()
             if line:
                 yield line
+
+
+def list_experiments(data_root: Path | str) -> list[str]:
+    root = Path(data_root) / "trajectories"
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir())
+
+
+def list_bugs(
+    data_root: Path | str,
+    exp_id: str,
+    status_filter: set[str] | None = None,
+) -> list[str]:
+    exp_dir = Path(data_root) / "trajectories" / exp_id
+    if not exp_dir.is_dir():
+        return []
+    out: list[str] = []
+    for p in exp_dir.iterdir():
+        if not p.is_dir() or ".trash-" in p.name:
+            continue
+        if status_filter is not None:
+            meta_path = p / "meta.json"
+            if not meta_path.exists():
+                continue
+            status = json.loads(meta_path.read_text()).get("status")
+            if status not in status_filter:
+                continue
+        out.append(p.name)
+    return sorted(out)
+
+
+def iter_trajectories(
+    data_root: Path | str,
+    exp_id: str,
+    *,
+    only_fixed: bool = False,
+    status_in: set[str] | None = None,
+    lazy_load_events: bool = False,  # reserved for future use
+):
+    """Yield Trajectory objects for an experiment, filtered by status."""
+    del lazy_load_events  # accepted for forward compat, not yet implemented
+    if only_fixed:
+        status_in = {"fixed"}
+    for bug_id in list_bugs(data_root, exp_id, status_filter=status_in):
+        yield load_trajectory(data_root, exp_id, bug_id)
