@@ -9,13 +9,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from dataclasses import dataclass
+from typing import Literal
+
 from apr_agent.schema import BugSample, Event, Trajectory, Turn, VerifyResult
 from apr_agent.trajectory.writer_jsonl import SCHEMA_VERSION, bug_dir_for
 
 __all__ = [
     "Trajectory", "Turn", "Event", "VerifyResult", "BugSample",
     "load_trajectory", "iter_trajectories", "list_bugs", "list_experiments",
-    "get_turns_as_messages",
+    "get_turns_as_messages", "get_events_stream",
+    "get_trajectory_for_summarization",
+    "get_experiment_summary", "ExperimentSummary",
+    "write_decomposed_steps", "read_decomposed_steps",
     "SchemaVersionError",
 ]
 
@@ -195,3 +201,134 @@ def get_turns_as_messages(
             })
 
     return messages
+
+
+def get_events_stream(trajectory: Trajectory) -> list[Event]:
+    """Return events in persistence order. Trivial today; here for forward compat."""
+    return list(trajectory.events)
+
+
+def get_trajectory_for_summarization(
+    trajectory: Trajectory,
+    *,
+    format: Literal["messages", "narrative", "events"] = "messages",
+):
+    """Shape a trajectory for step-summarization prompts.
+
+    - messages: OpenAI chat-template (thinking included; same as get_turns_as_messages)
+    - narrative: single human-readable string with turn boundaries
+    - events: flat event list (list[Event])
+    """
+    if format == "messages":
+        return get_turns_as_messages(trajectory, include_thinking=True)
+    if format == "events":
+        return get_events_stream(trajectory)
+    if format == "narrative":
+        return _render_narrative(trajectory)
+    raise ValueError(f"unknown format: {format}")
+
+
+def _render_narrative(trajectory: Trajectory) -> str:
+    lines: list[str] = []
+    lines.append(f"# Bug {trajectory.bug_id}  status={trajectory.status}")
+    lines.append(f"trigger_tests: {', '.join(trajectory.bug_sample.trigger_tests)}")
+    lines.append("")
+    for turn in trajectory.turns:
+        lines.append(f"## Turn {turn.turn_idx}")
+        if turn.thinking:
+            lines.append(f"(thinking) {turn.thinking}")
+        parsed = turn.response.get("parsed") if isinstance(turn.response, dict) else {}
+        content = (parsed or {}).get("content") or turn.response.get("content", "")
+        if content:
+            lines.append(content)
+        for tc in turn.tool_calls:
+            lines.append(f"→ {tc.tool_name}({_short_args(tc.tool_input)})"
+                         f"  is_error={tc.is_error}")
+            if tc.tool_output:
+                lines.append(f"   output: {tc.tool_output[:200]}"
+                             + ("…" if len(tc.tool_output) > 200 else ""))
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _short_args(d: dict) -> str:
+    parts = [f"{k}={_short_val(v)}" for k, v in d.items()]
+    return ", ".join(parts)
+
+
+def _short_val(v) -> str:
+    s = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else repr(v)
+    return s if len(s) <= 40 else s[:37] + "..."
+
+
+# --- experiment summary ---
+
+@dataclass
+class ExperimentSummary:
+    exp_id: str
+    total: int
+    fixed: int
+    failed: int
+    running: int
+    error: int
+    timeout: int
+    aborted: int
+    fix_rate: float     # fixed / total, 0 if total==0
+    bug_ids: list[str]
+
+
+def get_experiment_summary(
+    data_root: Path | str, exp_id: str,
+) -> ExperimentSummary:
+    exp_dir = Path(data_root) / "trajectories" / exp_id
+    if not exp_dir.is_dir():
+        return ExperimentSummary(exp_id=exp_id, total=0, fixed=0, failed=0, running=0,
+                                 error=0, timeout=0, aborted=0, fix_rate=0.0, bug_ids=[])
+    counts = {"fixed": 0, "failed": 0, "running": 0,
+              "error": 0, "timeout": 0, "aborted": 0}
+    bug_ids: list[str] = []
+    for p in sorted(exp_dir.iterdir()):
+        if not p.is_dir() or ".trash-" in p.name:
+            continue
+        meta_path = p / "meta.json"
+        if not meta_path.exists():
+            continue
+        meta = json.loads(meta_path.read_text())
+        status = meta.get("status", "error")
+        counts[status] = counts.get(status, 0) + 1
+        bug_ids.append(p.name)
+    total = sum(counts.values())
+    fix_rate = counts["fixed"] / total if total else 0.0
+    return ExperimentSummary(
+        exp_id=exp_id, total=total, fix_rate=fix_rate,
+        bug_ids=bug_ids, **counts,
+    )
+
+
+# --- downstream decomposition read/write ---
+
+def write_decomposed_steps(
+    data_root: Path | str, exp_id: str, bug_id: str, steps: list[dict],
+) -> None:
+    """Persist the step-summarizer's output alongside the trajectory.
+
+    `steps` is whatever shape the summarizer defines; we don't validate it.
+    File: <bug_dir>/decomposed_steps.json
+    """
+    bug_dir = bug_dir_for(data_root, exp_id, bug_id)
+    if not bug_dir.is_dir():
+        raise FileNotFoundError(f"Trajectory not found: {bug_dir}")
+    (bug_dir / "decomposed_steps.json").write_text(
+        json.dumps(steps, ensure_ascii=False, indent=2)
+    )
+
+
+def read_decomposed_steps(
+    data_root: Path | str, exp_id: str, bug_id: str,
+) -> list[dict] | None:
+    """Return the decomposed-steps output if present, else None."""
+    bug_dir = bug_dir_for(data_root, exp_id, bug_id)
+    fp = bug_dir / "decomposed_steps.json"
+    if not fp.exists():
+        return None
+    return json.loads(fp.read_text())
