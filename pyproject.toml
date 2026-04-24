@@ -8,6 +8,7 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.0",
     "pyyaml>=6.0",
+    "openai>=1.40",          # DashScope compatible-mode endpoint
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,11 @@ packages = ["src/apr_agent"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "defects4j: requires `defects4j` on PATH — skipped otherwise",
+    "slow: long-running integration test (checkout/compile/test a real bug)",
+    "needs_api_key: requires DASHSCOPE_API_KEY / QWEN_API_KEY in env",
+]
 
 [tool.ruff]
 line-length = 100
