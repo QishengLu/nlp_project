@@ -19,7 +19,6 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from apr_agent.agent.loop import AgentConfig, AgentLoop
 from apr_agent.defects4j.checkout import (

@@ -99,9 +99,10 @@ def test_real_defects4j_checkout_math(tmp_path: Path):
 @pytest.mark.slow
 def test_real_defects4j_verify_fixed_version_passes(tmp_path: Path):
     """Check out the FIXED version, diff vs buggy, verify the diff -> all_passing."""
+    import subprocess
+
     from apr_agent.defects4j.checkout import checkout_bug, git_init_baseline, teardown
     from apr_agent.defects4j.verify import verify_patch
-    import subprocess
 
     fixed = checkout_bug("Math-2", scratch_root=tmp_path / "scratch", version="f")
     try:

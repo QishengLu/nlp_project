@@ -7,9 +7,8 @@ are not guaranteed stable.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from apr_agent.schema import BugSample, Event, Trajectory, Turn, VerifyResult

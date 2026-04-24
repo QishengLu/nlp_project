@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from apr_agent.defects4j.test import _read_failing_tests_file, run_tests as d4j_run_tests
+from apr_agent.defects4j.test import _read_failing_tests_file
+from apr_agent.defects4j.test import run_tests as d4j_run_tests
 from apr_agent.tools.registry import Tool, ToolResult
 
 
