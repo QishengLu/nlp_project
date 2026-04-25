@@ -29,6 +29,8 @@ from apr_agent.defects4j.checkout import (
     teardown,
 )
 from apr_agent.defects4j.info import trigger_test_files
+from apr_agent.defects4j.test import read_failing_tests_with_details
+from apr_agent.defects4j.test import run_tests as d4j_run_tests
 from apr_agent.defects4j.verify import verify_patch
 from apr_agent.env_fingerprint import env_fingerprint
 from apr_agent.llm.client import LLMClient
@@ -93,8 +95,15 @@ def run_worker(payload: WorkerPayload) -> None:
     try:
         git_init_baseline(checkout.work_dir)
 
-        # 2. Build BugSample from the metadata we just learned.
-        bug_sample = _bug_sample_from_checkout(checkout, payload.dataset)
+        # 2a. Run the trigger tests once before the agent starts so we can
+        # ship the actual assertion + stack trace into the user prompt.
+        # Without this the agent has to rediscover the failure shape blindly,
+        # which wastes 10+ turns and often fails outright.
+        trigger_output = _capture_trigger_test_output(checkout)
+
+        # 2b. Build BugSample with the captured failure trace.
+        bug_sample = _bug_sample_from_checkout(checkout, payload.dataset,
+                                               trigger_test_output=trigger_output)
 
         # 3. Tools bound to the checkout's work_dir.
         registry = _build_registry(checkout)
@@ -210,7 +219,9 @@ def _build_config(agent_cfg: dict) -> AgentConfig:
     )
 
 
-def _bug_sample_from_checkout(checkout: CheckedOut, dataset: dict) -> BugSample:
+def _bug_sample_from_checkout(
+    checkout: CheckedOut, dataset: dict, *, trigger_test_output: str = "",
+) -> BugSample:
     return BugSample(
         bug_id=checkout.bug_id,
         project=checkout.project,
@@ -218,10 +229,37 @@ def _bug_sample_from_checkout(checkout: CheckedOut, dataset: dict) -> BugSample:
         buggy_checkout_dir=str(checkout.work_dir),
         trigger_tests=list(checkout.metadata.trigger_tests),
         currently_failing=list(checkout.metadata.trigger_tests),  # before agent edits
-        trigger_test_output="",  # TODO(M4): run one test to capture the failure trace
+        trigger_test_output=trigger_test_output,
         defects4j_version=dataset.get("defects4j_version", "2.0.1"),
         d4j_subset=dataset.get("d4j_subset"),
     )
+
+
+def _capture_trigger_test_output(checkout: CheckedOut, *, max_chars: int = 4000) -> str:
+    """Run the bug's trigger tests once, return the assertion+stack details.
+
+    Best-effort: if defects4j test errors out, return empty so the agent still
+    runs (it can call run_tests itself). The returned text feeds the user
+    prompt template's {trigger_test_output} placeholder.
+    """
+    if not checkout.metadata.trigger_tests:
+        return ""
+    try:
+        # Run the first trigger test only — fast and usually enough signal.
+        first = checkout.metadata.trigger_tests[0]
+        d4j_run_tests(checkout.work_dir, test_filter=first, timeout_s=120.0)
+    except Exception:
+        return ""
+    details = read_failing_tests_with_details(
+        checkout.work_dir, max_chars_per_test=max_chars,
+    )
+    if not details:
+        return ""
+    chunks = [f"### {tid}\n{detail}" for tid, detail in details.items()]
+    out = "\n\n".join(chunks)
+    if len(out) > max_chars:
+        out = out[:max_chars] + "\n... (truncated)"
+    return out
 
 
 def _version() -> str:
