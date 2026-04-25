@@ -1,17 +1,16 @@
 # Default configuration for `apr-agent run-batch`. See docs/plans/2026-04-24-apr-agent-design.md §8.2.
 
 model:
-  name: qwen-plus-latest
+  name: qwen3.5-plus
   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   max_tokens: 4096
   temperature: 0.2
-  # enable_thinking flows into DashScope extra_body. The qwen-plus tier may
-  # honour or silently ignore this depending on the underlying snapshot;
-  # parse_openai_response handles both reasoning_content and inline <think>.
+  # enable_thinking flows into DashScope extra_body; parse_openai_response
+  # handles both reasoning_content and inline <think> shapes.
   enable_thinking: true
 
 agent:
-  max_turns: 30
+  max_turns: 60
   overall_timeout_s: 1800
   tool_timeouts:
     run_tests: 300
@@ -38,6 +37,16 @@ agent:
       4. After every edit, call `run_tests` to confirm the trigger tests
          pass and no other tests regressed. If they still fail, iterate.
       5. Only call `finish` when `run_tests` reports 0 failing tests.
+
+    Strategy guidance:
+      - Spend AT MOST ~10 turns exploring (read_file, search_code,
+        list_directory). After that, MAKE A CONCRETE EDIT with
+        `replace_block`, even if you're not 100% sure — you can iterate.
+        Pure exploration that never edits is the most common failure mode.
+      - Prefer SMALL, LOCAL edits (a few lines) over rewrites.
+      - If your first edit doesn't work, REVERT it (replace your new_code
+        back with the old_code) before trying a different fix — don't
+        stack failed attempts.
 
     Do NOT call `finish` if your final patch is empty or the trigger tests
     still fail — that wastes the verification step and the trajectory will
