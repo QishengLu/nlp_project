@@ -16,3 +16,7 @@ scratch/
 
 # Env
 .env
+
+# Vendored deps (JDK 8, defects4j, Perl modules, cpanm) — large + reproducible
+# via scripts/bootstrap_vendor.sh
+vendor/
