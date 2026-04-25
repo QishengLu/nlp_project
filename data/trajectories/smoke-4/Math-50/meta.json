@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "exp_id": "smoke-4",
+  "bug_id": "Math-50",
+  "status": "fixed",
+  "started_at": 1777103048.0341005,
+  "model_name": "qwen3.5-plus",
+  "apr_agent_version": "0.1.0",
+  "env_fingerprint": {
+    "git_sha": "a952dff120ff8cf9406b46178cdef6c511382568",
+    "defects4j_version": "2.0.1",
+    "defects4j_commit_sha": "a83e47921152721569cb95d6d7b91c4be277d940",
+    "d4j_subset": "2.0",
+    "java_version": "openjdk version \"1.8.0_422\"",
+    "tz": "America/Los_Angeles",
+    "python_version": "3.11.13",
+    "apr_agent_version": "0.1.0",
+    "model_id": "qwen3.5-plus",
+    "host": "nn"
+  },
+  "ended_at": 1777103293.2569585,
+  "stop_reason": "finish",
+  "duration_s": 245.22
+}

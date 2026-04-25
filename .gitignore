@@ -9,10 +9,12 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Data
-data/
+# Data — checked-in fixed trajectories live under data/trajectories/<exp>/<bug>/.
+# Block the bulk dirs (raw subprocess logs, failed runs we don't ship) but
+# allow trajectories explicitly committed under data/trajectories/.
 scratch/
 *.log
+data/trajectories/*/*/raw/
 
 # Env
 .env

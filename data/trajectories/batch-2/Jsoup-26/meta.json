@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "exp_id": "batch-2",
+  "bug_id": "Jsoup-26",
+  "status": "fixed",
+  "started_at": 1777105292.306918,
+  "model_name": "qwen3.5-plus",
+  "apr_agent_version": "0.1.0",
+  "env_fingerprint": {
+    "git_sha": "c57e87907c5177c77acd2417aa22d73043aa7fc6",
+    "defects4j_version": "2.0.1",
+    "defects4j_commit_sha": "a83e47921152721569cb95d6d7b91c4be277d940",
+    "d4j_subset": "2.0",
+    "java_version": "openjdk version \"1.8.0_422\"",
+    "tz": "America/Los_Angeles",
+    "python_version": "3.11.13",
+    "apr_agent_version": "0.1.0",
+    "model_id": "qwen3.5-plus",
+    "host": "nn"
+  },
+  "ended_at": 1777105347.2724593,
+  "stop_reason": "finish",
+  "duration_s": 54.97
+}

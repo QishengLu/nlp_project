@@ -1,0 +1,11 @@
+{
+  "all_passing": true,
+  "previously_failing_now_passing": [
+    "org.mockitousage.bugs.NPEWithCertainMatchersTest::shouldNotThrowNPEWhenNullPassedToSame"
+  ],
+  "newly_failing": [],
+  "patch_applied": true,
+  "test_exit_code": 0,
+  "runtime_s": 21.07,
+  "raw_output": "Failing tests: 0\n\n--STDERR--\nRunning ant (compile.tests)................................................ OK\nRunning ant (run.dev.tests)................................................ OK"
+}

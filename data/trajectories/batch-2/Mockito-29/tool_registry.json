@@ -1,0 +1,164 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "read_file",
+      "description": "Read a text file from the bug checkout and return its contents with line numbers. Use start_line/end_line to page through large files. end_line=-1 means 'to end of file'.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path relative to the bug checkout root."
+          },
+          "start_line": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "default": -1,
+            "description": "1-based inclusive; -1 means EOF."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_directory",
+      "description": "List directory entries under the bug checkout. Set recursive=true to walk the tree (skips .git/build/target). max_entries truncates output.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "default": "."
+          },
+          "recursive": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_entries": {
+            "type": "integer",
+            "default": 200,
+            "minimum": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_code",
+      "description": "Search source files under the bug checkout for a pattern and return a list of {file, line, content} hits. Set is_regex=true to treat the pattern as a regex; otherwise it's a fixed string.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "default": "."
+          },
+          "is_regex": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_results": {
+            "type": "integer",
+            "default": 50,
+            "minimum": 1
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "replace_block",
+      "description": "Replace an exact block of text in a file with a new block. The old_code must match exactly once — zero or multiple matches abort (use more context). Editing the bug's trigger test files is forbidden.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "old_code": {
+            "type": "string"
+          },
+          "new_code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "old_code",
+          "new_code"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "run_tests",
+      "description": "Run the Defects4J test suite for the current bug. Optionally narrow to a single test with test_filter='ClassName::methodName'. Returns a summary with failing tests and the tail of the output.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "test_filter": {
+            "type": "string",
+            "description": "Optional single-test filter, e.g. 'org.FooTest::bar'."
+          },
+          "timeout_s": {
+            "type": "integer",
+            "default": 300,
+            "minimum": 10
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_failing_tests",
+      "description": "Return the list of tests currently failing in the bug checkout. Cheaper than run_tests when you just need the failing set — reads a cached `failing_tests` file if present, otherwise runs the suite once.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "finish",
+      "description": "Declare that the bug is fixed. Provide a short rationale describing what was changed and why.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rationale": {
+            "type": "string",
+            "description": "Short rationale for the fix."
+          }
+        },
+        "required": [
+          "rationale"
+        ]
+      }
+    }
+  }
+]

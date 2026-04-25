@@ -1,0 +1,12 @@
+{
+  "all_passing": true,
+  "previously_failing_now_passing": [
+    "org.apache.commons.codec.binary.Base64InputStreamTest::testBase64EmptyInputStream",
+    "org.apache.commons.codec.binary.Base64OutputStreamTest::testBase64EmptyOutputStream"
+  ],
+  "newly_failing": [],
+  "patch_applied": true,
+  "test_exit_code": 0,
+  "runtime_s": 1.94,
+  "raw_output": "Failing tests: 0\n\n--STDERR--\nRunning ant (compile.tests)................................................ OK\nRunning ant (run.dev.tests)................................................ OK"
+}
