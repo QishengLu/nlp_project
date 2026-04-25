@@ -61,8 +61,16 @@ def teardown(checkout: CheckedOut) -> None:
 
 
 def git_init_baseline(work_dir: Path) -> None:
-    """Turn the fresh checkout into a git repo so we can diff agent edits later."""
+    """Ensure work_dir has a clean git baseline so agent edits can be diffed.
+
+    Defects4J's own checkout already initializes a git repo with the buggy
+    version committed (HEAD detached at D4J_<Project>_<N>_BUGGY_VERSION). In
+    that case we use HEAD as the baseline — no extra commit needed. Only if
+    no git repo exists (e.g. a non-D4J caller of this helper) do we init one.
+    """
     import subprocess
+    if (work_dir / ".git").is_dir():
+        return
     subprocess.run(["git", "init", "-q"], cwd=work_dir, check=True)
     subprocess.run(["git", "add", "-A"], cwd=work_dir, check=True)
     subprocess.run(
