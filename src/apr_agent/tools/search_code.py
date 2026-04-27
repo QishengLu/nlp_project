@@ -53,7 +53,8 @@ class SearchCodeTool(Tool):
     def invoke(self, arguments: dict) -> ToolResult:
         pattern = arguments.get("pattern", "")
         if not pattern:
-            return ToolResult(output="", meta={"error": "empty pattern"}, is_error=True)
+            return ToolResult(output="ERROR: empty pattern",
+                              meta={"error": "empty pattern"}, is_error=True)
 
         path_arg = arguments.get("path", ".") or "."
         is_regex = bool(arguments.get("is_regex", False))
@@ -62,7 +63,7 @@ class SearchCodeTool(Tool):
         try:
             abs_path = resolve_in_sandbox(self.work_dir, path_arg)
         except PathEscapeError as e:
-            return ToolResult(output="", meta={"error": str(e)}, is_error=True)
+            return ToolResult(output=f"ERROR: {e}", meta={"error": str(e)}, is_error=True)
 
         rg_path = _resolve_real_rg(self._rg_bin)
         if rg_path is not None:

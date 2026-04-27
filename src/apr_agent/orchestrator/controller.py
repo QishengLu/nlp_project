@@ -1,8 +1,9 @@
 """Orchestrator — spawns one worker subprocess per bug, aggregates results.
 
-This is the sequential skeleton. M4 adds AIMD concurrency on top without
-changing the public shape: orchestrator always treats each worker as a
-black-box subprocess and reads results back off disk, not stdout.
+Concurrency: ThreadPoolExecutor over `spawn_worker`. Each worker is its own
+OS subprocess (with its own JVM tree under D4J), so threads here are just for
+coordinating I/O — the real parallelism is at the process level. Each bug's
+checkout dir is UUID-suffixed so concurrent D4J operations don't collide.
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,23 +81,44 @@ def run_batch(
     dataset_cfg: dict,
     overall_timeout_s: float = 1800.0,
     verify: bool = True,
+    concurrency: int = 1,
     on_outcome=None,                    # callable(WorkerOutcome) -> None
 ) -> list[WorkerOutcome]:
-    """Run every bug in `bugs` sequentially. Returns a list of outcomes.
+    """Run every bug in `bugs`. Returns outcomes in completion order (when
+    concurrency>1) or input order (when concurrency==1).
 
-    Concurrency is out of scope for M3; plug in the RolloutRunner AIMD scheduler
-    in M4 by batching spawn_worker calls via a pool instead of this loop.
+    `concurrency` caps simultaneous workers. Each worker is its own subprocess
+    (with its own JVM tree); 5 in parallel uses ~5-10GB RAM on Defects4J Math.
+    `on_outcome(outcome)` fires as each worker completes — useful for live logs.
     """
-    outcomes: list[WorkerOutcome] = []
-    for bug_id in bugs:
-        payload = build_worker_payload(
+    payloads = [
+        build_worker_payload(
             bug_id=bug_id, exp_id=exp_id,
             data_root=data_root, scratch_root=scratch_root,
             model_cfg=model_cfg, agent_cfg=agent_cfg,
             dataset_cfg=dataset_cfg, verify=verify,
         )
-        outcome = spawn_worker(payload, overall_timeout_s=overall_timeout_s)
-        outcomes.append(outcome)
-        if on_outcome is not None:
-            on_outcome(outcome)
+        for bug_id in bugs
+    ]
+
+    outcomes: list[WorkerOutcome] = []
+
+    if concurrency <= 1:
+        for p in payloads:
+            outcome = spawn_worker(p, overall_timeout_s=overall_timeout_s)
+            outcomes.append(outcome)
+            if on_outcome is not None:
+                on_outcome(outcome)
+        return outcomes
+
+    with ThreadPoolExecutor(max_workers=concurrency) as ex:
+        futures = {
+            ex.submit(spawn_worker, p, overall_timeout_s=overall_timeout_s): p
+            for p in payloads
+        }
+        for future in as_completed(futures):
+            outcome = future.result()
+            outcomes.append(outcome)
+            if on_outcome is not None:
+                on_outcome(outcome)
     return outcomes

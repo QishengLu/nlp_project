@@ -106,7 +106,13 @@ def run_worker(payload: WorkerPayload) -> None:
                                                trigger_test_output=trigger_output)
 
         # 3. Tools bound to the checkout's work_dir.
-        registry = _build_registry(checkout)
+        # baseline_failing = trigger tests; lets RunTestsTool label regressions.
+        # tool_timeouts override the per-tool defaults from configs/bugs.yaml.
+        registry = _build_registry(
+            checkout,
+            tool_timeouts=payload.agent.get("tool_timeouts") or {},
+            baseline_failing=set(checkout.metadata.trigger_tests),
+        )
 
         # 4. Recorder with fingerprint.
         model_id = payload.model.get("name", payload.model.get("type", "unknown"))
@@ -170,16 +176,31 @@ def run_worker(payload: WorkerPayload) -> None:
 
 # --- builders ---
 
-def _build_registry(checkout: CheckedOut) -> ToolRegistry:
+def _build_registry(
+    checkout: CheckedOut,
+    *,
+    tool_timeouts: dict | None = None,
+    baseline_failing: set[str] | None = None,
+) -> ToolRegistry:
     wd = checkout.work_dir
     protected = trigger_test_files(checkout.metadata)
+    timeouts = tool_timeouts or {}
+    run_tests_to = float(timeouts.get("run_tests", 300.0))
+
     reg = ToolRegistry()
     reg.register(ReadFileTool(wd))
     reg.register(ListDirectoryTool(wd))
     reg.register(SearchCodeTool(wd))
     reg.register(ReplaceBlockTool(wd, protected_paths=protected))
-    reg.register(RunTestsTool(wd))
-    reg.register(GetFailingTestsTool(wd))
+    reg.register(RunTestsTool(
+        wd,
+        default_timeout_s=run_tests_to,
+        baseline_failing=baseline_failing or frozenset(),
+    ))
+    reg.register(GetFailingTestsTool(wd, default_timeout_s=run_tests_to))
+    # Tier-2: cumulative diff visibility for the agent.
+    from apr_agent.tools.get_current_diff import GetCurrentDiffTool
+    reg.register(GetCurrentDiffTool(wd))
     reg.register(FinishTool())
     return reg
 

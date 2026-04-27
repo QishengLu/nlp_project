@@ -28,9 +28,40 @@ def test_run_tests_happy_path(tmp_path: Path, monkeypatch):
     )
     r = RunTestsTool(tmp_path).invoke({})
     assert r.meta["failing_count"] == 1
-    assert r.meta["failing_tests"] == ["org.FooTest::bar"]
+    assert r.meta["currently_failing"] == ["org.FooTest::bar"]
     assert r.meta["timed_out"] is False
     assert "last line" in r.output
+
+
+def test_run_tests_labels_regression_against_baseline(tmp_path: Path, monkeypatch):
+    """When the failing set diverges from baseline, output partitions newly /
+    still / now-passing so the LLM sees the regression explicitly."""
+    monkeypatch.setattr(
+        "apr_agent.tools.run_tests.d4j_run_tests",
+        lambda work_dir, test_filter=None, timeout_s=300.0: _fake_test_result(
+            failing_tests=["org.FooTest::baz", "org.OtherTest::regression"],
+        ),
+    )
+    tool = RunTestsTool(
+        tmp_path,
+        baseline_failing={"org.FooTest::bar", "org.FooTest::baz"},
+    )
+    r = tool.invoke({})
+    assert r.meta["newly_failing"] == ["org.OtherTest::regression"]
+    assert r.meta["still_failing"] == ["org.FooTest::baz"]
+    assert r.meta["now_passing"] == ["org.FooTest::bar"]
+    assert "newly_failing" in r.output and "regression" in r.output
+
+
+def test_run_tests_no_baseline_means_everything_is_newly_failing(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "apr_agent.tools.run_tests.d4j_run_tests",
+        lambda work_dir, test_filter=None, timeout_s=300.0: _fake_test_result(),
+    )
+    r = RunTestsTool(tmp_path).invoke({})  # no baseline
+    assert r.meta["newly_failing"] == ["org.FooTest::bar"]
+    assert r.meta["still_failing"] == []
+    assert r.meta["now_passing"] == []
 
 
 def test_run_tests_propagates_timeout_filter(tmp_path: Path, monkeypatch):

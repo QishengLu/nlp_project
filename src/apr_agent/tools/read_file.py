@@ -47,29 +47,30 @@ class ReadFileTool(Tool):
         try:
             abs_path = resolve_in_sandbox(self.work_dir, path_arg)
         except PathEscapeError as e:
-            return ToolResult(output="", meta={"error": str(e)}, is_error=True)
+            return ToolResult(output=f"ERROR: {e}", meta={"error": str(e)}, is_error=True)
 
         if not abs_path.exists():
-            return ToolResult(output="", meta={"error": f"file not found: {path_arg}"},
+            err = f"file not found: {path_arg}"
+            return ToolResult(output=f"ERROR: {err}", meta={"error": err},
                               is_error=True)
         if abs_path.is_dir():
-            return ToolResult(output="",
-                              meta={"error": f"path is a directory: {path_arg}"},
+            err = f"path is a directory: {path_arg}"
+            return ToolResult(output=f"ERROR: {err}", meta={"error": err},
                               is_error=True)
 
         size = abs_path.stat().st_size
         if size > _MAX_BYTES:
+            err = f"file too large: {size} bytes > {_MAX_BYTES}"
             return ToolResult(
-                output="",
-                meta={"error": f"file too large: {size} bytes > {_MAX_BYTES}",
-                      "size": size},
+                output=f"ERROR: {err}",
+                meta={"error": err, "size": size},
                 is_error=True,
             )
 
         try:
             raw = abs_path.read_text(encoding="utf-8", errors="replace")
         except OSError as e:
-            return ToolResult(output="", meta={"error": str(e)}, is_error=True)
+            return ToolResult(output=f"ERROR: {e}", meta={"error": str(e)}, is_error=True)
 
         lines = raw.splitlines()
         total = len(lines)
@@ -78,16 +79,22 @@ class ReadFileTool(Tool):
         if end_line == -1 or end_line > total:
             end_line = total
         if start_line > total:
+            err = f"start_line {start_line} past EOF (file has {total} lines)"
             return ToolResult(
-                output="",
-                meta={"error": f"start_line {start_line} past EOF (file has {total} lines)",
-                      "total_lines": total},
+                output=f"ERROR: {err}",
+                meta={"error": err, "total_lines": total},
                 is_error=True,
             )
 
+        # Use `|` between line number and content so the LLM can unambiguously
+        # tell where the gutter ends and the file's actual indent begins.
+        # A plain-space separator was causing the model to over-count indent
+        # by 2 when copying lines into replace_block's old_code (Gson-15
+        # took 35 turns thrashing on this before giving up and using shorter
+        # old_code blocks).
         width = max(2, len(str(end_line)))
         rendered = "\n".join(
-            f"{str(i).rjust(width)}  {lines[i - 1]}"
+            f"{str(i).rjust(width)}| {lines[i - 1]}"
             for i in range(start_line, end_line + 1)
         )
         return ToolResult(

@@ -35,7 +35,7 @@ def work(tmp_path: Path) -> Path:
 def test_read_file_numbered(work: Path):
     r = ReadFileTool(work).invoke({"path": "src/main/java/pkg/Foo.java"})
     assert r.is_error is False
-    assert " 1  public class Foo {" in r.output
+    assert " 1| public class Foo {" in r.output
     assert r.meta["total_lines"] == 5
 
 
@@ -45,8 +45,8 @@ def test_read_file_range(work: Path):
     )
     assert r.is_error is False
     assert r.output.splitlines() == [
-        " 2      public int add(int a, int b) {",
-        " 3          return a - b;",
+        " 2|     public int add(int a, int b) {",
+        " 3|         return a - b;",
     ]
 
 
@@ -133,6 +133,11 @@ def test_replace_block_unique_match(work: Path):
     assert r.is_error is False
     assert r.meta["applied"] is True
     assert (work / "src/main/java/pkg/Foo.java").read_text().count("a + b") == 1
+    # Mini-diff appended to output so LLM sees the change with context.
+    assert "applied 1 replacement" in r.output
+    assert "--- before" in r.output and "--- after" in r.output
+    assert "return a - b;" in r.output  # before block visible
+    assert "return a + b;" in r.output  # after block visible
 
 
 def test_replace_block_no_match(work: Path):

@@ -54,6 +54,11 @@ class Turn(_SchemaBase):
     thinking: str | None = None
     usage: dict                        # MUST have prompt_tokens+completion_tokens (0 ok)
     tool_calls: list[ToolCall]
+    # Auto-extracted from the last successful run_tests tool_call in this turn,
+    # if any. Lets downstream filter "agent self-corrected after seeing
+    # regression" patterns without re-parsing tool_meta. None = no run_tests
+    # this turn (or it errored). Schema 1.1+.
+    regression_summary: dict | None = None
 
 
 EventKind = Literal[

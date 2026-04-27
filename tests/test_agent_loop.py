@@ -53,6 +53,73 @@ def test_loop_respects_max_turns(tmp_path: Path):
     assert len(turns) == 2
 
 
+def test_loop_extracts_regression_summary_from_run_tests(tmp_path: Path):
+    """When the agent runs run_tests within a turn, the Turn.regression_summary
+    field should auto-populate from that tool_call's tool_meta. Schema 1.1+."""
+    from apr_agent.llm.client import ChatResponse
+    from apr_agent.tools.registry import Tool, ToolResult
+
+    class FakeRunTestsTool(Tool):
+        @property
+        def name(self): return "run_tests"
+        @property
+        def description(self): return "fake"
+        @property
+        def parameters(self): return {"type": "object", "properties": {}}
+        def invoke(self, arguments):
+            return ToolResult(
+                output="ok",
+                meta={
+                    "currently_failing": ["A::a", "B::b"],
+                    "newly_failing": ["B::b"],
+                    "still_failing": ["A::a"],
+                    "now_passing": [],
+                },
+            )
+
+    class OneShotClient:
+        def chat(self, *, messages, tools, temperature=0.2, max_tokens=4096):
+            return ChatResponse(
+                content="checking", thinking=None, stop_reason="tool_calls",
+                tool_calls=[{"id": "c1", "type": "function",
+                             "function": {"name": "run_tests", "arguments": "{}"}}],
+                usage={"prompt_tokens": 0, "completion_tokens": 0}, raw={},
+            )
+
+    reg = ToolRegistry()
+    reg.register(FakeRunTestsTool())
+    reg.register(FinishTool())
+    loop = AgentLoop(
+        llm=OneShotClient(), tools=reg,
+        config=AgentConfig(max_turns=1, system_prompt="s",
+                           user_prompt_template="fix {bug_id}"),
+    )
+    _, turns = loop.run(_bug())
+    rs = turns[0].regression_summary
+    assert rs is not None
+    assert rs["newly_failing"] == ["B::b"]
+    assert rs["still_failing"] == ["A::a"]
+    assert rs["currently_failing"] == ["A::a", "B::b"]
+
+
+def test_loop_regression_summary_none_when_no_run_tests(tmp_path: Path):
+    """If a turn has no successful run_tests, regression_summary stays None."""
+    fake = FakeLLMClient(script=[
+        ScriptedResponse(content="just thinking",
+                         tool_calls=[{"id": "c1", "name": "finish",
+                                      "arguments": {"rationale": "ok"}}]),
+    ])
+    reg = ToolRegistry()
+    reg.register(FinishTool())
+    loop = AgentLoop(
+        llm=fake, tools=reg,
+        config=AgentConfig(max_turns=1, system_prompt="s",
+                           user_prompt_template="fix {bug_id}"),
+    )
+    _, turns = loop.run(_bug())
+    assert turns[0].regression_summary is None
+
+
 def test_loop_survives_malformed_tool_arguments(tmp_path: Path):
     """Small models frequently emit invalid JSON in tool_calls. The loop must
     record the failure as is_error=True and keep going, so the LLM sees its own

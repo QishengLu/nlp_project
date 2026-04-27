@@ -54,7 +54,7 @@ def test_load_trajectory_roundtrip(tmp_path: Path):
     assert tr.tool_registry == [{"name": "finish"}]
     assert tr.meta["model_name"] == "fake"
     assert tr.meta["duration_s"] == 1.0
-    assert tr.meta["schema_version"] == "1.0"
+    assert tr.meta["schema_version"].startswith("1.")
 
 
 def test_load_trajectory_rejects_incompatible_schema_version(tmp_path: Path):

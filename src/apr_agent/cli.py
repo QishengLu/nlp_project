@@ -28,8 +28,12 @@ def run_batch_cmd(
         help="Comma-separated bug ids overriding configs/bugs.yaml `bugs:`"),
     skip_verify: bool = typer.Option(False, "--skip-verify"),
     overall_timeout_s: int = typer.Option(1800, "--overall-timeout-s"),
+    concurrency: int = typer.Option(
+        1, "--concurrency", "-j",
+        help="Number of worker subprocesses to run in parallel. Each uses ~1-2GB RAM (JVM).",
+    ),
 ) -> None:
-    """Run the agent on every bug in the config, sequentially."""
+    """Run the agent on every bug in the config."""
     cfg = _load_config(config)
     bugs = (
         [b.strip() for b in bugs_override.split(",") if b.strip()]
@@ -44,7 +48,10 @@ def run_batch_cmd(
     agent_cfg = dict(cfg.get("agent") or {})
     dataset_cfg = dict(cfg.get("dataset") or {})
 
-    typer.echo(f"running {len(bugs)} bug(s) → exp_id={exp_id} data_root={data_root}")
+    typer.echo(
+        f"running {len(bugs)} bug(s) → exp_id={exp_id} "
+        f"data_root={data_root} concurrency={concurrency}"
+    )
 
     def _log(outcome):
         typer.echo(f"  {outcome.bug_id}: rc={outcome.returncode}  "
@@ -58,6 +65,7 @@ def run_batch_cmd(
         model_cfg=model_cfg, agent_cfg=agent_cfg, dataset_cfg=dataset_cfg,
         overall_timeout_s=float(overall_timeout_s),
         verify=not skip_verify,
+        concurrency=concurrency,
         on_outcome=_log,
     )
     _print_summary(data_root, exp_id)

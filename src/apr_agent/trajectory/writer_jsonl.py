@@ -8,7 +8,14 @@ from pathlib import Path
 
 from apr_agent.schema import BugSample, Event, Turn, VerifyResult
 
-SCHEMA_VERSION = "1.0"
+# Frozen contract. Bump MAJOR on rename/remove/semantic change; bump MINOR for
+# additive fields. `extra="ignore"` plus the major check in api.load_trajectory
+# together guarantee old readers still load newer trajectories within the same
+# major. Changelog:
+#   1.0 — initial M1 schema
+#   1.1 — Turn.regression_summary (additive, optional); RunTestsTool meta
+#         enriched with newly_failing / still_failing / now_passing
+SCHEMA_VERSION = "1.1"
 
 
 def bug_dir_for(data_root: Path | str, exp_id: str, bug_id: str) -> Path:

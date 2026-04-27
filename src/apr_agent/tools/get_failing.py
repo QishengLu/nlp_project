@@ -44,8 +44,9 @@ class GetFailingTestsTool(Tool):
         try:
             res = d4j_run_tests(self.work_dir, timeout_s=self._default_timeout_s)
         except Exception as e:  # noqa: BLE001
-            return ToolResult(output="", meta={"error": f"{type(e).__name__}: {e}"},
-                              is_error=True)
+            err = f"{type(e).__name__}: {e}"
+            return ToolResult(output=f"ERROR: {err}",
+                              meta={"error": err}, is_error=True)
         return ToolResult(
             output="\n".join(res.failing_tests),
             meta={"count": len(res.failing_tests), "source": "ran_defects4j_test",

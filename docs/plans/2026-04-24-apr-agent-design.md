@@ -190,10 +190,16 @@ class Turn(BaseModel):
     response: dict                  # {"parsed": {"content", "stop_reason", "tool_calls"},
                                     #  "raw": <provider-native dump>}
                                     # parsed 是稳定契约，raw 不保证 shape
-    thinking: str | None = None     # 解析 <think>...</think> 抽出（M3 待验证载体形式）
+    thinking: str | None = None     # message.reasoning_content（DashScope thinking models）
+                                    # 或 inline <think>...</think>。qwen3.5-plus 走前者
     usage: dict                     # MUST contain {"prompt_tokens", "completion_tokens"}
                                     # 缺项填 0，不得省略——per-turn cost 归因必需
     tool_calls: list[ToolCall]
+    regression_summary: dict | None = None   # schema 1.1+；从该 turn 最后一次成功的
+                                    # run_tests tool_meta 里抽出。形如：
+                                    # {"currently_failing": [...], "newly_failing": [...],
+                                    #  "still_failing": [...], "now_passing": [...]}
+                                    # None = 该 turn 没有成功的 run_tests
 
 class Event(BaseModel):
     event_id: int
@@ -232,7 +238,11 @@ class Trajectory(BaseModel):
 
 `model_config = ConfigDict(extra="ignore")` 让下游读老数据不炸。
 
-**Schema 版本**：`meta.json` 里写 `"schema_version": "1.0"`。`load_trajectory` 遇到不认识的 major 号直接 raise。`extra="ignore"` 只扛加字段，扛不住 rename/删字段/语义变化，必须靠显式版本号。
+**Schema 版本**：`meta.json` 里写 `"schema_version": "<major>.<minor>"`，当前 `"1.1"`。`load_trajectory` 遇到不认识的 major 号直接 raise。`extra="ignore"` 只扛加字段，扛不住 rename/删字段/语义变化，必须靠显式版本号。
+
+变更日志：
+- **1.1**（v0.4.0）：`Turn.regression_summary` 字段（additive，可选）；`RunTestsTool` 的 `tool_meta` 加 `currently_failing`/`newly_failing`/`still_failing`/`now_passing`；新增 `get_current_diff` tool。
+- 1.0（v0.1.0–v0.3.x）：M1 初始版本。
 
 ### 5.2 On-disk layout (per bug)
 
@@ -283,21 +293,31 @@ OpenAI chat-template 兼容（role: system/user/assistant/tool，`tool_calls`/`t
 
 M3 第一步先跑 `scripts/qwen_smoke.py`：单轮 chat，完整打印 response JSON 原样，确认字段形状再写 parser。别预先押注。
 
-## 6. Tools (7 个)
+## 6. Tools (8 个)
 
 | Tool | 签名 | 备注 |
 |-----|------|-----|
-| `read_file` | `(path, start_line=1, end_line=-1) -> str` | 带行号 |
-| `list_directory` | `(path, recursive=false, max_entries=200) -> list[str]` | |
-| `search_code` | `(pattern, path=".", is_regex=false, max_results=50) -> list[{file,line,content}]` | ripgrep |
-| `replace_block` | `(path, old_code, new_code) -> {applied, matches}` | exact search-replace；0 或 ≥2 match 即 fail |
-| `run_tests` | `(test_filter=None, timeout_s=300) -> {passing, failing, output_tail}` | `defects4j test` 封装 |
-| `get_failing_tests` | `() -> list[str]` | |
+| `read_file` | `(path, start_line=1, end_line=-1) -> str` | 带行号；gutter 用 `\| ` 分隔（`123\| <content>`），让 indent 边界对 LLM 不歧义 |
+| `list_directory` | `(path, recursive=false, max_entries=200) -> list[str]` | 自动跳过 `.git`/`build`/`target` 等 |
+| `search_code` | `(pattern, path=".", is_regex=false, max_results=50) -> list[{file,line,content}]` | ripgrep 优先，缺则 pure-Python 回退 |
+| `replace_block` | `(path, old_code, new_code) -> {applied, matches}` | exact search-replace；0 或 ≥2 match 即 fail；deny-list = trigger test 路径硬禁 |
+| `run_tests` | `(test_filter=None, timeout_s=300) -> {currently_failing, newly_failing, still_failing, now_passing, output_tail}` | `defects4j test` 封装；输出**显式 partition 当前失败 vs baseline trigger tests**——agent 能直接看到自己引入的回归 |
+| `get_failing_tests` | `() -> list[str]` | 优先读 cached `failing_tests` 文件 |
+| `get_current_diff` | `() -> str` | **schema 1.1+**。返回累计 `git diff HEAD`（cap 30K），让 agent 不必 `read_file` 重读就能看到自己改了什么 |
 | `finish` | `(rationale: str) -> None` | 宣告完成 |
+
+**错误反馈契约**：所有 tool 在 `is_error=True` 路径下，错误描述同时写到 `tool_output`（LLM 看见的）和 `tool_meta["error"]`（结构化）。LLM 永远不会拿到空字符串然后猜原因——这是 v0.4.0 修复的关键 UX bug，把 JacksonDatabind-1 从 93 turn 降到 14 turn。
 
 **排除**：通用 shell、git 操作、任意写路径。
 
-**`replace_block` 防作弊 deny-list**（M2 实现）：用 `defects4j export -p tests.trigger` 拿到权威 trigger test 路径做硬名单，**不要用 `*Test*.java` 正则**——会漏 `*IT.java`/`*Spec.java`，会误伤 `TestUtils.java` 这类工具类。`BugSample.trigger_tests` 已经把路径带过来了，直接用。
+**`replace_block` 防作弊 deny-list**（M2 已实现）：worker 启动时调 `defects4j export -p tests.trigger` 拿权威 trigger test 路径，由 `trigger_test_files()` 把测试 id 翻译成 `src/test/...` 路径并注入 `ReplaceBlockTool(work_dir, protected_paths=...)`。**不用 `*Test*.java` 正则**——会漏 `*IT.java`/`*Spec.java`，会误伤 `TestUtils.java`。
+
+**`run_tests` 回归识别**（M3+ 实现）：worker 启动时把 `BugSample.trigger_tests` 当作 baseline failing set 传给 `RunTestsTool(baseline_failing=...)`。每次 invoke 后 partition：
+- `newly_failing` = currently \ baseline（agent 引入的回归）
+- `still_failing` = currently ∩ baseline（trigger 还没修好）
+- `now_passing` = baseline \ currently（trigger 已修好）
+
+LLM 直接在 tool_output 里看到这个 partition，不用自己对历史 list 做 diff。
 
 ## 7. Defects4J integration
 
@@ -413,14 +433,15 @@ def read_decomposed_steps(data_root, exp_id, bug_id) -> list[Step] | None
 
 ## 11. Milestones
 
-| M | 内容 | 产物 |
-|---|-----|-----|
-| M1 (1–2w) | schema + writer + fake LLM end-to-end | fake trajectory 能读回 |
-| M2 (1w) | Defects4J env 层 + 真 tool | `defects4j test` 跑通 |
-| M3 (1–2w) | agent loop + Qwen client + Chart-1 冒烟 | 真 bug 能被真 Qwen 修好 |
-| M4 (1w) | orchestrator + 多 bug + AIMD | 10 个 bug baseline |
-| M5 (1w) | 包打磨 + 文档 + 交付 | 下游同学能消费 |
-| M6+ | 扩展到 100–835 bugs；DB 迁移/HTTP（可选） | 规模实验 |
+| M | 状态 | 内容 | 产物 |
+|---|---|-----|-----|
+| M1 | ✅ v0.1.0-m1 | schema 1.0 + writer + fake LLM end-to-end | fake trajectory 能读回 |
+| M2 | ✅ v0.3.0-m3 | Defects4J env 层 + 7 个真 tool | `defects4j test` 跑通 |
+| M3 | ✅ v0.3.0-m3 | agent loop + Qwen client + 真 bug 修复 | 13 fixed trajectories（v0.3.1） |
+| M3+ | ✅ v0.4.0 | schema 1.1（regression_summary）+ get_current_diff tool + 错误反馈 fix + 并发 orchestrator | 16 fixed trajectories 跨 16 项目 |
+| M4 | 🔜 | AIMD scheduler + retry/resume + scratch GC | 100+ bug baseline |
+| M5 | 🔜 | 包打磨 + 文档 + 交付 | 下游同学能消费 |
+| M6+ | future | 扩展到 800+ bugs；DB 迁移（design §15）/HTTP（可选） | 规模实验 |
 
 ## 12. Env fingerprint (reproducibility)
 

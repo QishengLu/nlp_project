@@ -67,8 +67,12 @@ class AgentLoop:
                     tool_input = {}
                     parse_error = f"{type(e).__name__}: {e}"
                 if parse_error is not None:
+                    err_msg = (
+                        f"ERROR: tool arguments are not valid JSON ({parse_error}). "
+                        f"Re-emit the tool call with strictly valid JSON in arguments."
+                    )
                     out, meta, is_err = (
-                        "",
+                        err_msg,
                         {"error": "malformed_tool_arguments",
                          "parse_error": parse_error,
                          "raw_arguments": fn["arguments"]},
@@ -81,7 +85,8 @@ class AgentLoop:
                     if tool.terminates_loop:
                         terminated = True
                 else:
-                    out, meta, is_err = "", {"error": f"unknown tool {tool_name}"}, True
+                    err = f"unknown tool {tool_name!r} — pick from the registered tools list"
+                    out, meta, is_err = f"ERROR: {err}", {"error": err}, True
                 t_end = time.time()
                 tool_calls_record.append(ToolCall(
                     call_id=tc["id"], tool_name=tool_name,
@@ -105,6 +110,7 @@ class AgentLoop:
                 thinking=resp.thinking,
                 usage=resp.usage,
                 tool_calls=tool_calls_record,
+                regression_summary=_extract_regression_summary(tool_calls_record),
             )
             turns.append(turn)
 
@@ -122,3 +128,26 @@ class AgentLoop:
                 return "finish", turns
 
         return "max_turns", turns
+
+
+def _extract_regression_summary(tool_calls: list[ToolCall]) -> dict | None:
+    """Lift the regression labels out of the last successful run_tests in this
+    turn. Returns None if no run_tests fired (or only errored ones did).
+
+    Schema 1.1+: surfaces `currently_failing/newly_failing/still_failing/now_passing`
+    on the Turn so downstream filters can find "agent saw regression and reacted"
+    moments without re-parsing each ToolCall.tool_meta.
+    """
+    for tc in reversed(tool_calls):
+        if tc.tool_name != "run_tests" or tc.is_error:
+            continue
+        m = tc.tool_meta or {}
+        if "newly_failing" not in m and "still_failing" not in m:
+            return None  # pre-1.1 RunTestsTool, no labels available
+        return {
+            "currently_failing": list(m.get("currently_failing", [])),
+            "newly_failing":     list(m.get("newly_failing", [])),
+            "still_failing":     list(m.get("still_failing", [])),
+            "now_passing":       list(m.get("now_passing", [])),
+        }
+    return None

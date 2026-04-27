@@ -44,6 +44,36 @@ def test_run_batch_calls_worker_per_bug(monkeypatch, tmp_path: Path):
     assert [o.returncode for o in outcomes] == [0, 0, 0]
 
 
+def test_run_batch_parallel_runs_concurrently(monkeypatch, tmp_path: Path):
+    """With concurrency>1, workers run in parallel — total wall time should be
+    close to the longest single worker, not the sum."""
+    import time as _time
+
+    started: list[float] = []
+
+    def fake_spawn(payload, *, overall_timeout_s):
+        started.append(_time.time())
+        # Sleep to simulate work — use a short delay so the test stays fast.
+        _time.sleep(0.5)
+        return WorkerOutcome(bug_id=payload["bug_id"], returncode=0,
+                             duration_s=0.5, stderr_tail="")
+
+    monkeypatch.setattr("apr_agent.orchestrator.controller.spawn_worker", fake_spawn)
+    t0 = _time.time()
+    outcomes = run_batch(
+        bugs=["A-1", "A-2", "A-3", "A-4"],
+        exp_id="e", data_root=tmp_path / "data", scratch_root=tmp_path / "s",
+        model_cfg={}, agent_cfg={}, dataset_cfg={},
+        concurrency=4,
+    )
+    elapsed = _time.time() - t0
+    assert len(outcomes) == 4
+    # Sequential would be ~2.0s; with 4-way parallel should be ~0.5-0.8s.
+    assert elapsed < 1.5, f"expected parallel run, got {elapsed:.2f}s wall"
+    # All 4 workers should have started within 0.2s of each other.
+    assert max(started) - min(started) < 0.3, "workers didn't start concurrently"
+
+
 def test_run_batch_propagates_timeout_failure(monkeypatch, tmp_path: Path):
     def fake_spawn(payload, *, overall_timeout_s):
         return WorkerOutcome(bug_id=payload["bug_id"], returncode=-1,

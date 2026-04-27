@@ -38,7 +38,7 @@ def test_init_bug_dir_creates_files(tmp_path: Path):
     assert meta["status"] == "running"
     assert meta["bug_id"] == "Math-12"
     assert meta["model_name"] == "qwen"
-    assert meta["schema_version"] == "1.0"
+    assert meta["schema_version"].startswith("1.")    # major-1 contract
     assert (bug_dir / "turns.jsonl").exists()
     assert (bug_dir / "events.jsonl").exists()
 

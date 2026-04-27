@@ -43,13 +43,15 @@ class ListDirectoryTool(Tool):
         try:
             abs_path = resolve_in_sandbox(self.work_dir, path_arg)
         except PathEscapeError as e:
-            return ToolResult(output="", meta={"error": str(e)}, is_error=True)
+            return ToolResult(output=f"ERROR: {e}", meta={"error": str(e)}, is_error=True)
 
         if not abs_path.exists():
-            return ToolResult(output="", meta={"error": f"path not found: {path_arg}"},
+            err = f"path not found: {path_arg}"
+            return ToolResult(output=f"ERROR: {err}", meta={"error": err},
                               is_error=True)
         if not abs_path.is_dir():
-            return ToolResult(output="", meta={"error": f"not a directory: {path_arg}"},
+            err = f"not a directory: {path_arg}"
+            return ToolResult(output=f"ERROR: {err}", meta={"error": err},
                               is_error=True)
 
         root = self.work_dir.resolve()
