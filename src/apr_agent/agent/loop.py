@@ -115,9 +115,26 @@ class AgentLoop:
             turns.append(turn)
 
             # Build messages for next turn (so the LLM sees its own prior outputs).
+            #
+            # IMPORTANT: rebuild tool_calls from the parsed `tool_calls_record`,
+            # NOT from `resp.tool_calls` raw. Some providers (DashScope) reject
+            # echoed tool_calls whose `arguments` aren't valid JSON. If the LLM
+            # emitted malformed JSON we already recorded `tool_input={}` plus
+            # an is_error ToolCall — re-serialize from that so the next turn's
+            # assistant message is always well-formed.
             assistant_msg: dict = {"role": "assistant", "content": resp.content}
-            if resp.tool_calls:
-                assistant_msg["tool_calls"] = resp.tool_calls
+            if tool_calls_record:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tcr.call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tcr.tool_name,
+                            "arguments": _json.dumps(tcr.tool_input, ensure_ascii=False),
+                        },
+                    }
+                    for tcr in tool_calls_record
+                ]
             messages.append(assistant_msg)
             for tcr in tool_calls_record:
                 messages.append({

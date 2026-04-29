@@ -308,6 +308,8 @@ M3 第一步先跑 `scripts/qwen_smoke.py`：单轮 chat，完整打印 response
 
 **错误反馈契约**：所有 tool 在 `is_error=True` 路径下，错误描述同时写到 `tool_output`（LLM 看见的）和 `tool_meta["error"]`（结构化）。LLM 永远不会拿到空字符串然后猜原因——这是 v0.4.0 修复的关键 UX bug，把 JacksonDatabind-1 从 93 turn 降到 14 turn。
 
+**Tool-call echo 契约**（v0.4.1+）：`AgentLoop` 构造下一轮请求时，**重新序列化** `tool_calls_record` 里的 `tool_input` 为 `function.arguments`，而不是直接 echo LLM 上一轮的原始字符串。原因：DashScope 等服务端会校验 echoed tool_call 的 `arguments` 是合法 JSON——如果 LLM 上一轮吐了非法 JSON，原样 echo 就会导致下一轮 chat 被 400 → worker 直接 crash。重新序列化一遍保证总是合法（即便上一轮我们已经记 `is_error=True` + `tool_input={}`，echo 出去的 args 也是 `"{}"` 而非原始非法字符串）。
+
 **排除**：通用 shell、git 操作、任意写路径。
 
 **`replace_block` 防作弊 deny-list**（M2 已实现）：worker 启动时调 `defects4j export -p tests.trigger` 拿权威 trigger test 路径，由 `trigger_test_files()` 把测试 id 翻译成 `src/test/...` 路径并注入 `ReplaceBlockTool(work_dir, protected_paths=...)`。**不用 `*Test*.java` 正则**——会漏 `*IT.java`/`*Spec.java`，会误伤 `TestUtils.java`。

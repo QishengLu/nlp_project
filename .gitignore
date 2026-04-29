@@ -9,11 +9,16 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Data — checked-in fixed trajectories live under data/trajectories/<exp>/<bug>/.
-# Block the bulk dirs (raw subprocess logs, failed runs we don't ship) but
-# allow trajectories explicitly committed under data/trajectories/.
+# Data — produced trajectories never pushed.
+# Drop trajectory experiments under data/trajectories/<exp_id>/<bug_id>/;
+# the directory is auto-ignored so generated data (often 100MB+) never
+# accidentally ends up in the repo. Datasets are distributed as tarballs
+# (see README "Producing / sharing trajectories").
 scratch/
 *.log
+*.tar.gz
+data/trajectories/*
+!data/trajectories/README.md
 data/trajectories/*/*/raw/
 
 # Env

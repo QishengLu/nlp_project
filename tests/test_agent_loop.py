@@ -120,6 +120,62 @@ def test_loop_regression_summary_none_when_no_run_tests(tmp_path: Path):
     assert turns[0].regression_summary is None
 
 
+def test_loop_sanitizes_malformed_args_when_echoing_to_next_turn(tmp_path: Path):
+    """When the LLM emits malformed-JSON arguments, the loop must NOT echo
+    that string back into the next turn's messages — providers (DashScope) 400
+    on tool_calls whose `function.arguments` aren't valid JSON. We re-serialize
+    from the parsed `tool_calls_record` instead."""
+    from apr_agent.llm.client import ChatResponse
+
+    captured_messages: list[list[dict]] = []
+
+    class CapturingClient:
+        def __init__(self):
+            self._calls = 0
+
+        def chat(self, *, messages, tools, temperature=0.2, max_tokens=4096):
+            captured_messages.append([dict(m) for m in messages])
+            self._calls += 1
+            if self._calls == 1:
+                # First turn: emit malformed JSON in arguments.
+                return ChatResponse(
+                    content="trying", thinking=None, stop_reason="tool_calls",
+                    tool_calls=[{"id": "c1", "type": "function",
+                                 "function": {"name": "finish",
+                                              "arguments": "{not valid json"}}],
+                    usage={"prompt_tokens": 0, "completion_tokens": 0}, raw={},
+                )
+            # Second turn: terminate cleanly.
+            return ChatResponse(
+                content="ok", thinking=None, stop_reason="tool_calls",
+                tool_calls=[{"id": "c2", "type": "function",
+                             "function": {"name": "finish",
+                                          "arguments": '{"rationale":"done"}'}}],
+                usage={"prompt_tokens": 0, "completion_tokens": 0}, raw={},
+            )
+
+    reg = ToolRegistry()
+    reg.register(FinishTool())
+    loop = AgentLoop(
+        llm=CapturingClient(), tools=reg,
+        config=AgentConfig(max_turns=5, system_prompt="s", user_prompt_template="f {bug_id}"),
+    )
+    loop.run(_bug())
+
+    # Second turn's request must NOT contain the original malformed string.
+    second_turn_msgs = captured_messages[1]
+    echoed_assistant = [m for m in second_turn_msgs if m.get("role") == "assistant"]
+    assert echoed_assistant, "expected an assistant message echoed back"
+    tcs = echoed_assistant[0].get("tool_calls", [])
+    assert len(tcs) == 1
+    args_str = tcs[0]["function"]["arguments"]
+    # Must be valid JSON (not the raw "{not valid json" the LLM emitted).
+    import json as _j
+    _j.loads(args_str)        # raises if not valid JSON
+    # And it should be a sanitized empty-args object (since the parse failed).
+    assert _j.loads(args_str) == {}
+
+
 def test_loop_survives_malformed_tool_arguments(tmp_path: Path):
     """Small models frequently emit invalid JSON in tool_calls. The loop must
     record the failure as is_error=True and keep going, so the LLM sees its own

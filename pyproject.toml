@@ -1,6 +1,6 @@
 [project]
 name = "apr-agent"
-version = "0.4.0"
+version = "0.4.1"
 description = "Agent-driven APR trajectory producer for Defects4J"
 requires-python = ">=3.11"
 dependencies = [

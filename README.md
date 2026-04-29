@@ -2,7 +2,7 @@
 
 LLM agent for automated program repair on Defects4J. Records every fix attempt as a structured trajectory (per-turn LLM request/response, tool calls, regression labels, final patch, independent verification result) under a frozen pydantic schema.
 
-**Current release: v0.4.0** — schema 1.1, 8 tools, parallel orchestrator, 16 verified fixed trajectories shipped under `data/trajectories/final/`.
+**Current release: v0.4.1** — schema 1.1, 8 tools, parallel orchestrator. Trajectory datasets are distributed as tarballs (not committed to the repo) — see [Datasets](#datasets) below.
 
 ---
 
@@ -16,9 +16,9 @@ LLM agent for automated program repair on Defects4J. Records every fix attempt a
   - [Statistics](#statistics)
   - [Decomposition write-back](#decomposition-write-back)
   - [Schema types](#schema-types)
-- [Dataset](#dataset)
+- [Datasets](#datasets)
 - [Schema versioning](#schema-versioning)
-- [Producing new trajectories](#producing-new-trajectories)
+- [Producing / sharing trajectories](#producing--sharing-trajectories)
 - [Tool reference](#tool-reference)
 - [Design](#design)
 - [Development](#development)
@@ -47,11 +47,18 @@ Requires Python ≥ 3.11. Reading trajectories needs no other system dependency.
 
 ## Quick start
 
+The repo ships **code only**. Trajectory datasets are distributed as tarballs
+(see [Datasets](#datasets)). Drop one under `data/trajectories/` then iterate:
+
+```bash
+tar xzf math-distill-60.tar.gz       # extracts data/trajectories/math-distill-60/
+```
+
 ```python
 import apr_agent
 
-# Iterate over fixed trajectories from the shipped dataset
-for tr in apr_agent.iter_trajectories("data", "final", only_fixed=True):
+# Read whatever experiment you've placed under data/trajectories/
+for tr in apr_agent.iter_trajectories("data", "math-distill-60", only_fixed=True):
     msgs = apr_agent.get_turns_as_messages(tr, include_thinking=True)
     print(tr.bug_id, len(msgs), "messages,",
           len([t for t in tr.turns if t.regression_summary]), "regression-aware turns")
@@ -241,34 +248,42 @@ Raised by `load_trajectory` when the on-disk `meta.schema_version` has a differe
 
 ---
 
-## Dataset
+## Datasets
 
-16 fixed trajectories under `data/trajectories/final/`, one per Defects4J project (every project except Chart, which requires SVN). All have `meta.status == "fixed"` and `verify.all_passing == True` with no newly-failing tests.
+This repo holds **code only**. Generated trajectory data is not committed —
+`data/trajectories/` is gitignored except for its README. Datasets are
+distributed as tarballs the producer uploads / sends out of band.
 
-| Project | Bug | Turns | Fix size |
+Available datasets (ask the producer for a download link):
+
+| Tarball | Content | Size | Schema |
 |---|---|---|---|
-| Cli | Cli-11 | 14 | small |
-| Closure | Closure-62 | 12 | small |
-| Codec | Codec-2 | 14 | small |
-| Collections | Collections-26 | 16 | medium (added readObject + imports) |
-| Compress | Compress-19 | 10 | small |
-| Csv | Csv-11 | 9 | small |
-| Gson | Gson-15 | 11 | small |
-| JacksonCore | JacksonCore-5 | 6 | small |
-| JacksonDatabind | JacksonDatabind-1 | 20 | small |
-| JacksonXml | JacksonXml-5 | 16 | medium |
-| Jsoup | Jsoup-26 | 15 | medium |
-| JxPath | JxPath-22 | 23 | medium |
-| Lang | Lang-21 | 8 | small |
-| Math | Math-70 | 9 | small |
-| Mockito | Mockito-29 | 13 | medium |
-| Time | Time-7 | 34 | medium |
+| `math-distill-60.tar.gz` | 60 verified-fixed Math trajectories (subset of 81 fixed from Math-1..91 attempts) | ~20 MB | 1.1 |
+| `final-16.tar.gz` *(legacy)* | 16 trajectories, one per Defects4J project (Cli/Closure/Codec/Collections/Compress/Csv/Gson/JacksonCore/JacksonDatabind/JacksonXml/Jsoup/JxPath/Lang/Math/Mockito/Time) | ~12 MB | 1.1 |
 
-Generation env: `qwen3.5-plus` via DashScope OpenAI-compat endpoint, `max_turns=60`, `temperature=0.2`, `enable_thinking=true`. Total agent compute 31.8 min; wall clock ~10 min with `--concurrency 5`.
+All trajectories have `meta.status == "fixed"`, `verify.all_passing == True`,
+no `newly_failing` tests, and a non-empty `final_patch.diff`. Generation env
+for both: `qwen3.5-plus` via DashScope, `max_turns=60`, `temperature=0.2`,
+`enable_thinking=true`.
 
-Per-bug on-disk layout:
+### How to use a dataset
+
+```bash
+# In the project root after cloning the repo:
+tar xzf math-distill-60.tar.gz                # → data/trajectories/math-distill-60/
 ```
-data/trajectories/final/<bug_id>/
+
+```python
+import apr_agent
+for tr in apr_agent.iter_trajectories("data", "math-distill-60", only_fixed=True):
+    msgs = apr_agent.get_turns_as_messages(tr, include_thinking=True)
+    # msgs is OpenAI chat-template, ready for SFT
+```
+
+### Per-bug on-disk layout
+
+```
+data/trajectories/<exp_id>/<bug_id>/
 ├── meta.json              status, schema_version="1.1", env_fingerprint, timing
 ├── bug_sample.json        BugSample
 ├── tool_registry.json     OpenAI function schemas the agent saw (8 tools)
@@ -294,9 +309,24 @@ data/trajectories/final/<bug_id>/
 
 ---
 
-## Producing new trajectories
+## Producing / sharing trajectories
 
 Requires Java 8, Defects4J, and a DashScope API key. All vendored under `vendor/`; bootstrap is a single command.
+
+### Where data lives
+
+Trajectories the agent produces land under `data/trajectories/<exp_id>/<bug_id>/`.
+**The whole `data/trajectories/` directory is gitignored** (except its README) —
+generated data is too large and too transient for git. To share a dataset
+with downstream consumers, tarball it:
+
+```bash
+tar czf my-exp.tar.gz data/trajectories/my-exp/
+# upload / send out of band; recipient extracts in their project root.
+```
+
+The recipient just runs `tar xzf my-exp.tar.gz` and the layout is correct.
+There is no extra import or registration step.
 
 ### One-time setup
 
@@ -395,7 +425,8 @@ uv run ruff check .
 
 - `v0.1.0-m1` — schema 1.0, JSONL writer, FakeLLM end-to-end
 - `v0.3.0-m3` — real tools, Defects4J env layer, Qwen client, subprocess worker, sequential orchestrator
-- `v0.3.1-trajectories` — above + 13 fixed trajectories (single-thread baseline)
-- **`v0.4.0` (current)** — schema 1.1 (`regression_summary`), 8 tools (added `get_current_diff`), parallel orchestrator (`--concurrency`), tool error messages in `tool_output`, gutter separator fix, 16 fixed trajectories under `data/trajectories/final/`
+- `v0.3.1-trajectories` — above + 13 fixed trajectories (single-thread baseline; data was committed; deprecated)
+- `v0.4.0` — schema 1.1 (`regression_summary`), 8 tools (added `get_current_diff`), parallel orchestrator (`--concurrency`), tool error messages in `tool_output`, gutter separator fix
+- **`v0.4.1` (current)** — `AgentLoop` now sanitizes echoed `tool_calls.arguments` before sending the next-turn request (fixes a DashScope 400 when the LLM emits malformed JSON args). `data/trajectories/` is now fully gitignored — datasets ship as tarballs out of band.
 
 Roadmap: M5 (handoff/docs polish), M6+ (scale to 100+ bugs, migrate JSONL → SQLite — see [design doc §15](docs/plans/2026-04-24-apr-agent-design.md)).
